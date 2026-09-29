@@ -1,0 +1,45 @@
+# Copyright 2026 FlagOS Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Iluvatar CoreX (BI-V150) CI configuration.
+# Harbor image + self-hosted runner are NOT published yet (DOCKER_BIN=no on
+# the adaptation host). Keep platforms.yml `iluvatar.enabled: false` until
+# ci_image and runner_labels point at a real CoreX CI image/runner.
+
+platform: iluvatar
+
+# Placeholder — replace after Harbor publishes a CoreX CI image.
+ci_image: harbor.baai.ac.cn/plugin/vllm-plugin-fl:v0.28.0-iluvatar-ci
+
+# Placeholder — replace with the real self-hosted CoreX runner labels.
+runner_labels:
+  - self-hosted
+  - Linux
+  - X64
+  - iluvatar
+  - bi-v150
+
+container_volumes:
+  - /data:/data
+  - /mnt/share:/mnt/share
+
+container_options: >-
+  --privileged
+  --ipc=host
+  --hostname vllm-plugin-fl-iluvatar
+  --user root
+  --env VLLM_PLUGINS=fl
+  --env USE_FLAGGEMS=1
+  --env GEMS_VENDOR=iluvatar
+  --ulimit nofile=65535:65535

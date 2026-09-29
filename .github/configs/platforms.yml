@@ -34,3 +34,6 @@ platforms:
     enabled: false
   kunlunxin:
     enabled: false
+  # Keep false until Harbor CoreX CI image + self-hosted runner exist.
+  iluvatar:
+    enabled: false
