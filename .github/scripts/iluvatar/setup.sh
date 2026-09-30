@@ -38,6 +38,7 @@ assert torch.cuda.is_available(), "Iluvatar accelerator is unavailable"
 assert torch.cuda.device_count() >= 4, torch.cuda.device_count()
 assert current_platform.device_type == "cuda", current_platform.device_type
 assert current_platform.vendor_name == "iluvatar", current_platform.vendor_name
+assert vllm.__version__.startswith("0.28"), vllm.__version__
 
 print(f"vLLM import ok: {vllm.__version__}")
 print(f"vLLM-FL import ok: {vllm_fl.__file__}")
