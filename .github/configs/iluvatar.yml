@@ -13,16 +13,15 @@
 # limitations under the License.
 
 # Iluvatar CoreX (BI-V150) CI configuration.
-# Harbor image + self-hosted runner are NOT published yet (DOCKER_BIN=no on
-# the adaptation host). Keep platforms.yml `iluvatar.enabled: false` until
-# ci_image and runner_labels point at a real CoreX CI image/runner.
+# ci_image published 2026-09-30:
+#   harbor.baai.ac.cn/plugin/vllm-plugin-fl:v0.28.0-iluvatar-ci
+#   digest sha256:cc8ed9969977a06996c86c483851567f212ab9761bb9147e85082b4a34ce88b8
+# Jobs need a self-hosted runner matching the labels below.
 
 platform: iluvatar
 
-# Placeholder — replace after Harbor publishes a CoreX CI image.
 ci_image: harbor.baai.ac.cn/plugin/vllm-plugin-fl:v0.28.0-iluvatar-ci
 
-# Placeholder — replace with the real self-hosted CoreX runner labels.
 runner_labels:
   - self-hosted
   - Linux

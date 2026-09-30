@@ -178,7 +178,6 @@ jobs:
 
   # ============================================================
   # Job 4h: Iluvatar CoreX platform testing
-  # Keep platforms.yml iluvatar.enabled=false until Harbor image + runner exist.
   # ============================================================
   test-iluvatar:
     needs: discover

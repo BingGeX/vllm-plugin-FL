@@ -34,6 +34,6 @@ platforms:
     enabled: false
   kunlunxin:
     enabled: false
-  # Keep false until Harbor CoreX CI image + self-hosted runner exist.
+  # Image published; needs a self-hosted runner with labels in configs/iluvatar.yml.
   iluvatar:
-    enabled: false
+    enabled: true
