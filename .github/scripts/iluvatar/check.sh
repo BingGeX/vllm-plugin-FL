@@ -18,17 +18,14 @@ fi
 python - <<'PY'
 import torch
 
-if not torch.cuda.is_available():
-    raise RuntimeError("Iluvatar/CUDA device is not available via torch.cuda")
-
+assert torch.cuda.is_available(), "Iluvatar accelerator is unavailable"
 count = torch.cuda.device_count()
-print(f"Accelerator count: {count}")
-if count < 1:
-    raise RuntimeError("At least 1 accelerator is required")
+assert count >= 4, f"At least 4 Iluvatar devices are required, found {count}"
 
-name = torch.cuda.get_device_name(0)
-print(f"Device 0: {name}")
 tensor = torch.ones((32, 32), device="cuda:0")
 torch.cuda.synchronize()
+
+print(f"Iluvatar devices: {count}")
+print(f"Device 0: {torch.cuda.get_device_name(0)}")
 print(f"Tensor smoke: {tensor.device} {tuple(tensor.shape)}")
 PY
