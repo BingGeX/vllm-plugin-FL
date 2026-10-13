@@ -25,11 +25,12 @@ try:
         FlashinferMoeBackend,
     )
 except ImportError:
-    # vLLM >= 0.28 removed this enum (backend enums moved into
-    # fused_moe/oracle/* per quantisation type).  It is only used below to
-    # validate an explicit VLLM_FLASHINFER_MOE_BACKEND value, a path that is
-    # never taken on non-NVIDIA platforms; keep a minimal string shim so the
-    # import stays valid.
+    # vLLM 0.28 API compatibility (NOT MetaX-specific): >= 0.28 removed this
+    # enum (backend enums moved into fused_moe/oracle/* per quantisation
+    # type); the import is a plain version shim that keeps the module
+    # importable on any backend.  The shim class is only reached when a user
+    # explicitly sets VLLM_FLASHINFER_MOE_BACKEND, a path that is never taken
+    # on non-NVIDIA platforms.
     class FlashinferMoeBackend:  # type: ignore[no-redef]
         CUTLASS = "cutlass"
         TENSORRT_LLM = "trtllm"

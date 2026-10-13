@@ -7,6 +7,10 @@ import vllm.model_executor.layers.fused_moe as _fused_moe_pkg
 # custom_ops.py patches _fused_moe_pkg.FusedMoE = FusedMoEFL at runtime,
 # so calling _fused_moe_pkg.FusedMoE() inside FusedMoEFL would recurse
 # infinitely.  Capturing it here breaks the cycle.
+# vLLM 0.28 API compatibility (NOT MetaX-specific): 0.28 moved the factory to
+# `FusedMoEFactory` and left `FusedMoE` behind as the legacy alias.  Resolve
+# the new name first so the same code path works on both releases; the
+# `getattr`/fallback pair is a version shim shared by all backends.
 _OrigFusedMoE = getattr(_fused_moe_pkg, "FusedMoEFactory", None)
 if _OrigFusedMoE is None:  # vllm <= 0.24 named this factory FusedMoE
     _OrigFusedMoE = _fused_moe_pkg.FusedMoE

@@ -155,7 +155,10 @@ def _patch_fused_moe_factory() -> None:
     import vllm.model_executor.layers.fused_moe as _fused_moe_pkg
     import vllm.model_executor.layers.fused_moe.layer as _fused_moe_layer
 
-    # vllm 0.28 renamed this factory to FusedMoEFactory.
+    # vLLM 0.28 API compatibility (NOT MetaX-specific): 0.28 renamed this
+    # factory to FusedMoEFactory and kept FusedMoE as a deprecated alias, so
+    # patch both names.  This is a backend-agnostic rename shim -- every
+    # vendor goes through it, not just metax.
     _names = ("FusedMoE", "FusedMoEFactory")
     if any(getattr(_fused_moe_layer, _n, None) is FusedMoEFL for _n in _names):
         return
