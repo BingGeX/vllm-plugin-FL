@@ -48,6 +48,15 @@ from vllm.distributed.parallel_state import (
     get_tp_group,
 )
 from vllm.logger import init_logger
+
+# FL: vLLM >= 0.28 removed userbuffer comm-GEMM overlap; tolerate its absence.
+try:  # pragma: no cover - vLLM version compat
+    from vllm.distributed.parallel_state import (
+        prepare_communication_buffer_for_model as _prepare_comm_buffer,
+    )
+except ImportError:  # vLLM >= 0.28 dropped the symbol
+    def _prepare_comm_buffer(*args, **kwargs):
+        return None
 from vllm.lora.request import LoRARequest
 from vllm.utils.torch_utils import set_random_seed
 from vllm.model_executor.models.interfaces import is_mixture_of_experts
@@ -239,6 +248,14 @@ class WorkerFL(WorkerBase):
         self.profiler: Any | None = None
         profiler_config = vllm_config.profiler_config
         self.profiler_config = profiler_config
+
+        # vllm 0.28: Worker.use_v2_model_runner is read unconditionally by
+        # vllm/model_executor/warmup/kernel_warmup.py (kernel_warmup).
+        # Mirror the native v1 gpu_worker assignment so WorkerFL exposes it.
+        try:
+            self.use_v2_model_runner = bool(vllm_config.use_v2_model_runner)
+        except Exception:
+            self.use_v2_model_runner = False
 
         # Only validate profiler config is valid, don't instantiate yet
         if self.profiler_config.profiler not in ("torch", "cuda", None):
@@ -1125,7 +1142,7 @@ class WorkerFL(WorkerBase):
         from vllm.distributed.parallel_state import (
             get_dp_group,
             get_ep_group,
-            prepare_communication_buffer_for_model,
+
         )
         from vllm.model_executor.layers.fused_moe.layer import (
             FusedMoE,
@@ -1208,9 +1225,9 @@ class WorkerFL(WorkerBase):
             parallel_config.eplb_config.num_redundant_experts = (
                 new_physical_experts - global_expert_loads[0].shape[1]
             )
-        prepare_communication_buffer_for_model(self.model_runner.model)
+        _prepare_comm_buffer(self.model_runner.model)
         if drafter_model is not None:
-            prepare_communication_buffer_for_model(drafter_model)
+            _prepare_comm_buffer(drafter_model)
         self.model_runner.model.update_physical_experts_metadata(
             num_physical_experts=new_physical_experts,
             num_local_physical_experts=num_local_physical_experts,

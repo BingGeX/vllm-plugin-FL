@@ -20,9 +20,32 @@ from vllm.model_executor.layers.fused_moe.experts.triton_moe import TritonExpert
 from vllm.model_executor.layers.fused_moe.fused_moe import try_get_optimal_moe_config
 from vllm.model_executor.layers.fused_moe.utils import _resize_cache, moe_kernel_quantize_input
 import os
-from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
-    FlashinferMoeBackend,
-)
+try:
+    from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
+        FlashinferMoeBackend,
+    )
+except ImportError:
+    # vLLM >= 0.28 removed this enum (backend enums moved into
+    # fused_moe/oracle/* per quantisation type).  It is only used below to
+    # validate an explicit VLLM_FLASHINFER_MOE_BACKEND value, a path that is
+    # never taken on non-NVIDIA platforms; keep a minimal string shim so the
+    # import stays valid.
+    class FlashinferMoeBackend:  # type: ignore[no-redef]
+        CUTLASS = "cutlass"
+        TENSORRT_LLM = "trtllm"
+
+        def __init__(self, value):
+            self.value = str(value).strip().lower()
+
+        def __eq__(self, other):
+            o = str(getattr(other, "value", other)).strip().lower()
+            return self.value == o or o in self.value
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __str__(self):
+            return self.value
 from vllm.triton_utils import tl, triton
 from vllm_fl.dispatch import CachedOp
 from vllm_fl.ops.fused_moe.activation import apply_moe_activation

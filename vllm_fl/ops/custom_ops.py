@@ -155,11 +155,12 @@ def _patch_fused_moe_factory() -> None:
     import vllm.model_executor.layers.fused_moe as _fused_moe_pkg
     import vllm.model_executor.layers.fused_moe.layer as _fused_moe_layer
 
-    if getattr(_fused_moe_layer, "FusedMoE", None) is FusedMoEFL:  # noqa F405
-        # Already patched — idempotent.
+    # vllm 0.28 renamed this factory to FusedMoEFactory.
+    _names = ("FusedMoE", "FusedMoEFactory")
+    if any(getattr(_fused_moe_layer, _n, None) is FusedMoEFL for _n in _names):
         return
-
-    # Patch at the module level so `from vllm...fused_moe import FusedMoE` picks it up.
-    _fused_moe_layer.FusedMoE = FusedMoEFL  # noqa F405
-    _fused_moe_pkg.FusedMoE = FusedMoEFL   # noqa F405
-    logger.info("Monkey-patched FusedMoE factory -> FusedMoEFL")
+    for _mod in (_fused_moe_layer, _fused_moe_pkg):
+        for _n in _names:
+            if hasattr(_mod, _n):
+                setattr(_mod, _n, FusedMoEFL)
+    logger.info("Monkey-patched FusedMoE/FusedMoEFactory -> FusedMoEFL")

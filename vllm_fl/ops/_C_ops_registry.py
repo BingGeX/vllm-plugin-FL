@@ -5,6 +5,7 @@
 # is not compiled for this platform.
 
 import logging
+import os
 
 import torch
 
@@ -51,15 +52,28 @@ def _is_metax_backend() -> bool:
     names and raise a duplicate-registration ``c10::Error``, so every
     ``import vllm._C`` below is gated on this check.
     """
+    # Non-reentrant by construction: this function is reached from the
+    # ``vllm.platform_plugins`` entry point (vllm_fl:register) while
+    # vllm.platforms is still resolving ``current_platform``.  A plain
+    # ``from vllm.platforms import current_platform`` here would re-enter that
+    # resolution, recursing until RecursionError and leaving vLLM with
+    # UnspecifiedPlatform.  Consult only an *already resolved* platform and
+    # otherwise fall back to a hardware/environment probe.
+    import importlib.util
+    import sys
+
+    resolved = getattr(sys.modules.get("vllm.platforms"), "_current_platform", None)
+    if resolved is not None:
+        is_metax = getattr(resolved, "is_metax", None)
+        if callable(is_metax):
+            try:
+                return bool(is_metax())
+            except Exception:
+                pass
+    if os.environ.get("GEMS_VENDOR", "").strip().lower() == "metax":
+        return True
     try:
-        from vllm.platforms import current_platform
-    except Exception:
-        return False
-    is_metax = getattr(current_platform, "is_metax", None)
-    if not callable(is_metax):
-        return False
-    try:
-        return bool(is_metax())
+        return importlib.util.find_spec("mcoplib") is not None
     except Exception:
         return False
 

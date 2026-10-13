@@ -139,10 +139,20 @@ def _patch_flash_attn_import():
 
 
 def _is_metax_backend() -> bool:
-    """True when vLLM resolved the MetaX (maca) platform."""
+    """True when this process runs on the MetaX (maca) backend."""
     from vllm_fl.ops._C_ops_registry import _is_metax_backend as _impl
 
     return _impl()
+
+
+def _metax_plugin_installed() -> bool:
+    """True when vllm_metax (the vendor platform plugin) is importable."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("vllm_metax") is not None
+    except Exception:
+        return False
 
 
 def _patch_custom_ops():
@@ -191,9 +201,19 @@ def register():
     # ['metax', 'fl']).  On that backend FL must not claim the platform slot:
     # the general plugin (vllm_fl:register_model) keeps FL's model and kernel
     # registrations.
-    if _is_metax_backend():
+    # Only yield the platform slot when the user actually asked for the
+    # vendor plugin (VLLM_PLUGINS allows "metax" and not "fl") and it is
+    # installed.  Keying this on the *hardware* instead would leave a MetaX
+    # host on UnspecifiedPlatform whenever VLLM_PLUGINS=fl: vLLM 0.28 would
+    # then activate neither plugin and no builtin plugin matches MACA.
+    _allowed = [
+        p.strip()
+        for p in (os.environ.get("VLLM_PLUGINS") or "").split(",")
+        if p.strip()
+    ]
+    if "metax" in _allowed and "fl" not in _allowed and _metax_plugin_installed():
         logger.info(
-            "[vllm_fl] MetaX backend -> vLLM metax platform; "
+            "[vllm_fl] VLLM_PLUGINS requests metax -> vLLM metax platform; "
             "FL platform registration skipped"
         )
         return None

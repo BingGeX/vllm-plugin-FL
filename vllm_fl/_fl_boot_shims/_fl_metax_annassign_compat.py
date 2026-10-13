@@ -80,16 +80,20 @@ def _patch(mod):
                 return False
         return orig_assign(self, node)
 
-    def visit_AnnAssign(self, node):
-        conv = _as_assign(node)
-        if conv is None:
-            return False
-        return visit_Assign(self, conv)
+    # NOTE (cx fix r83): intentionally do NOT override visit_AnnAssign.
+    # triton 3.0 visit_AnnAssign (code_generator.py:479) has a `tl.constexpr`
+    # branch at :484-492 that registers `x: tl.constexpr = v` into lscope as a
+    # constexpr. Overriding it degraded every constexpr annotated assignment to
+    # a plain assignment, which broke any @triton.jit subfunction that uses them
+    # (measured: flag_gems/ops/sort.py floating_to_uint -> get_int_t ->
+    #  tl.core.get_int_dtype) with
+    #   ValueError(_builder or _semantic ... outside of JIT functions.)
+    # triton's non-constexpr fall-through calls self.visit_Assign(node), which is
+    # already patched above to handle AnnAssign (node.target).
 
     gen.visit_Assign = visit_Assign
-    gen.visit_AnnAssign = visit_AnnAssign
     setattr(mod, _MARK, True)
-    return True, "patched visit_AnnAssign/visit_Assign (stub verified=%s)" % verified
+    return True, "patched visit_Assign only (stub verified=%s)" % verified
 
 
 class _Loader(_abc.Loader):
