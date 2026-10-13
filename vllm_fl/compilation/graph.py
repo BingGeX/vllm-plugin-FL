@@ -1,14 +1,13 @@
 # Copyright (c) 2025 BAAI. All rights reserved.
-# Adapted from https://github.com/vllm-project/vllm/blob/v0.19.0/vllm/compilation/cuda_graph.py
+# Adapted from https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/compilation/cuda_graph.py
 # Below is the original copyright:
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import dataclasses
 import weakref
-from collections import Counter
 from collections.abc import Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -26,17 +25,73 @@ from vllm.forward_context import (
 )
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
+from vllm.utils.torch_utils import current_stream
 
 logger = init_logger(__name__)
 
 
 # FL-specific: platform-agnostic weak_ref_tensors
-def weak_ref_tensors(tensor: Any) -> Any:
+def _weak_ref_npu_tensor(value: Any) -> Any:
+    if isinstance(value, torch.Tensor) and value.device.type == "npu":
+        import torch_npu
+
+        # Bound in torch_npu/csrc/npu/Module.cpp in the pinned 2.10 runtime.
+        weak_ref_tensor = getattr(
+            getattr(torch_npu, "_C", None), "_weak_ref_tensor", None
+        )
+        if not callable(weak_ref_tensor):
+            raise RuntimeError(
+                "NPU graph weak references require torch_npu._C._weak_ref_tensor. "
+                "Use the documented torch-npu 2.10 runtime or disable graph mode."
+            )
+        return weak_ref_tensor(value)
+    return value
+
+
+def _weak_ref_npu_tensors(value: Any) -> Any:
+    """Recursively replace NPU tensors without retaining graph-pool storage."""
+    if isinstance(value, torch.Tensor):
+        return _weak_ref_npu_tensor(value)
+    if isinstance(value, list):
+        return [_weak_ref_npu_tensors(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_weak_ref_npu_tensors(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _weak_ref_npu_tensors(item) for key, item in value.items()}
+
+    from vllm.sequence import IntermediateTensors
+
+    if isinstance(value, IntermediateTensors):
+        return IntermediateTensors(
+            {key: _weak_ref_npu_tensors(item) for key, item in value.tensors.items()}
+        )
+    return value
+
+
+def weak_ref_tensors(value: Any) -> Any:
+    if current_platform.device_type == "npu":
+        # The empty vLLM wheel registers torch.ops._C.weak_ref_tensor as an
+        # identity. torch_npu's private primitive creates the real weak tensor
+        # needed to release captured graph outputs.
+        return _weak_ref_npu_tensors(value)
+
     try:
-        from vllm.utils.torch_utils import weak_ref_tensors
-        return weak_ref_tensors(tensor)
+        from vllm.utils.torch_utils import (
+            weak_ref_tensors as upstream_weak_ref_tensors,
+        )
+
+        return upstream_weak_ref_tensors(value)
     except Exception:
-        return tensor
+        return value
+
+
+def _graph_capture_stream() -> Any:
+    if current_platform.device_type == "npu":
+        # vLLM's current_stream helper maintains CUDA-specific thread-local
+        # state and can remain on the default stream while torch.npu.stream()
+        # has selected the side stream used for graph capture.
+        return current_platform.torch_device_fn.current_stream()
+    return current_stream()
 
 
 # FL-specific: platform-agnostic graph class selection
@@ -91,11 +146,13 @@ class GraphWrapper:
         for instance in list(cls._all_instances):
             instance.clear_graphs()
 
-    def __init__(self,
-                 runnable: Callable,
-                 vllm_config: VllmConfig,
-                 runtime_mode: CUDAGraphMode,
-                 cudagraph_options: GraphOptions | None = None):
+    def __init__(
+        self,
+        runnable: Callable,
+        vllm_config: VllmConfig,
+        runtime_mode: CUDAGraphMode,
+        cudagraph_options: GraphOptions | None = None,
+    ):
         self.runnable = runnable
         self.vllm_config = vllm_config
         self.runtime_mode = runtime_mode
@@ -187,39 +244,45 @@ class GraphWrapper:
 
             with ExitStack() as stack:
                 if self.cudagraph_options.gc_disable:
-                    stack.enter_context(patch("gc.collect", lambda: None))
-                    # FL-specific: patch our platform's empty_cache
                     stack.enter_context(
-                        patch("vllm_fl.platform.PlatformFL.empty_cache",
-                              lambda: None)
+                        patch("gc.collect", lambda *args, **kwargs: None)
+                    )
+                    stack.enter_context(
+                        patch(
+                            "torch.accelerator.empty_cache",
+                            lambda *args, **kwargs: None,
+                        )
+                    )
+                    stack.enter_context(
+                        patch(
+                            "vllm_fl.platform.PlatformFL.empty_cache",
+                            lambda *args, **kwargs: None,
+                        )
                     )
 
-            if self.graph_pool is not None:
-                set_graph_pool_id(self.graph_pool)
-            else:
-                set_graph_pool_id(current_platform.graph_pool_handle())
+                if self.graph_pool is not None:
+                    set_graph_pool_id(self.graph_pool)
+                else:
+                    set_graph_pool_id(current_platform.graph_pool_handle())
 
-            # Sync offloader's copy stream before capture if available.
-            try:
-                from vllm.model_executor.offloader.base import get_offloader
-                get_offloader().sync_prev_onload()
-            except (ImportError, RuntimeError):
-                pass
-
-            # FL-specific: use platform-agnostic graph capture
-            with current_platform.torch_device_fn.graph(
-                graph, pool=self.graph_pool
-            ):
-                # `output` is managed by pytorch's cudagraph pool
-                output = self.runnable(*args, **kwargs)
-                # Join offloader's copy stream after forward if available
-                try:
+                # Sync offloader's copy stream before capture if available.
+                with suppress(ImportError, RuntimeError):
                     from vllm.model_executor.offloader.base import get_offloader
-                    get_offloader().join_after_forward()
-                except (ImportError, RuntimeError):
-                    pass
-                if self.cudagraph_options.weak_ref_output:
-                    output = weak_ref_tensors(output)
+
+                    get_offloader().sync_prev_onload()
+
+                # FL-specific: use platform-agnostic graph capture while
+                # preserving the explicit stream used by vLLM v0.28.0.
+                with current_platform.torch_device_fn.graph(
+                    graph,
+                    pool=self.graph_pool,
+                    stream=_graph_capture_stream(),
+                ):
+                    output = self.runnable(*args, **kwargs)
+                    with suppress(ImportError, RuntimeError, UnboundLocalError):
+                        get_offloader().join_after_forward()
+                    if self.cudagraph_options.weak_ref_output:
+                        output = weak_ref_tensors(output)
 
             entry.output = weak_ref_tensors(output)
             entry.graph = graph
@@ -243,11 +306,10 @@ class GraphWrapper:
             )
 
         # Sync offloader before replay if available
-        try:
+        with suppress(ImportError, RuntimeError):
             from vllm.model_executor.offloader.base import get_offloader
+
             get_offloader().sync_prev_onload()
-        except (ImportError, RuntimeError):
-            pass
 
         if current_platform.device_type == "npu":
             current_platform.torch_device_fn.synchronize()

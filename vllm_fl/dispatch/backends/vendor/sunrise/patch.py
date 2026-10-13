@@ -92,12 +92,12 @@ def patch_flagcx_stream_adapter():
 def patch_distributed_runtime():
     """Keep FlagCX path while mapping torch ProcessGroup backend to pccl."""
     try:
-        from vllm.platforms import current_platform
         from vllm.distributed.device_communicators.base_device_communicator import (
             DeviceCommunicatorBase,
         )
+        from vllm.platforms import current_platform
+
         from vllm_fl.distributed.communicator import CommunicatorFL
-        from vllm_fl.worker import worker as worker_mod
 
         platform_cls = (
             current_platform
@@ -112,7 +112,12 @@ def patch_distributed_runtime():
         platform_cls.dist_backend = "flagcx"
         current_platform.dist_backend = "flagcx"
 
+        # WorkerFL normalizes flagcx/nccl process groups to pccl for PTPU.
+        # Do not import or wrap worker here: worker -> custom_ops -> this module
+        # would create a circular import during backend registration.
+
         if not getattr(CommunicatorFL, "_sunrise_all_gather_patched", False):
+
             def _all_gather(self, input_: torch.Tensor, dim: int = -1):
                 world_size = self.world_size
                 if world_size == 1:
@@ -145,34 +150,7 @@ def patch_distributed_runtime():
             CommunicatorFL.all_gather = _all_gather
             CommunicatorFL._sunrise_all_gather_patched = True
 
-        init_dist = worker_mod.init_worker_distributed_environment
-        if not getattr(init_dist, "_sunrise_backend_patched", False):
-            def _init_worker_distributed_environment(
-                vllm_config,
-                rank,
-                distributed_init_method=None,
-                local_rank=-1,
-                backend="nccl",
-            ):
-                backend_for_pg = backend
-                if backend in ("flagcx", "nccl"):
-                    backend_for_pg = "pccl"
-                return init_dist(
-                    vllm_config,
-                    rank,
-                    distributed_init_method=distributed_init_method,
-                    local_rank=local_rank,
-                    backend=backend_for_pg,
-                )
-
-            _init_worker_distributed_environment._sunrise_backend_patched = True
-            worker_mod.init_worker_distributed_environment = (
-                _init_worker_distributed_environment
-            )
-
-        logger.info(
-            "Configured Sunrise/PTPU to use FlagCX communicator with pccl PGs"
-        )
+        logger.info("Configured Sunrise/PTPU to use FlagCX communicator with pccl PGs")
     except Exception as e:
         logger.warning("Failed to configure Sunrise distributed runtime: %s", e)
 

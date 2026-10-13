@@ -1,8 +1,10 @@
 # Copyright (c) 2025 BAAI. All rights reserved.
 
-from typing import Optional
+
 import torch
+
 from vllm.model_executor.layers.rotary_embedding import RotaryEmbedding
+
 from vllm_fl.dispatch import CachedOp
 
 _rotary_embedding = CachedOp("rotary_embedding")
@@ -17,19 +19,31 @@ class RotaryEmbeddingFL(RotaryEmbedding):
         base: float,
         is_neox_style: bool,
         dtype: torch.dtype,
+        init_cache: bool = True,
     ) -> None:
         super().__init__(
-            head_size, rotary_dim, max_position_embeddings, base,
-            is_neox_style, dtype
+            head_size,
+            rotary_dim,
+            max_position_embeddings,
+            base,
+            is_neox_style,
+            dtype,
+            init_cache,
         )
 
     def forward_oot(
         self,
         positions: torch.Tensor,
         query: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        self.cos_sin_cache: torch.Tensor = self.cos_sin_cache.to(positions.device)
+        key: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # The FL rotary backends require both query and key.  vLLM 0.28 also
+        # calls RotaryEmbedding with key=None for cross-layer KV sharing, so
+        # preserve the upstream native path for that supported input.
+        if key is None:
+            return self.forward_native(positions, query, key)
+
+        cos_sin_cache = self._match_cos_sin_cache_dtype(query)
         positions = positions.flatten()
         num_tokens = positions.shape[0]
 
@@ -41,10 +55,10 @@ class RotaryEmbeddingFL(RotaryEmbedding):
         query_rot = query[..., : self.rotary_dim]
         key_rot = key[..., : self.rotary_dim]
         if self.rotary_dim < self.head_size:
-            query_pass = query[..., self.rotary_dim:]
-            key_pass = key[..., self.rotary_dim:]
+            query_pass = query[..., self.rotary_dim :]
+            key_pass = key[..., self.rotary_dim :]
 
-        cos, sin = self.cos_sin_cache.chunk(2, dim=-1)
+        cos, sin = cos_sin_cache.chunk(2, dim=-1)
 
         q_embed, k_embed = _rotary_embedding(
             self,
@@ -65,6 +79,14 @@ class RotaryEmbeddingFL(RotaryEmbedding):
             key = k_embed.reshape(key_shape)
 
         return query, key
+
+    def forward_cuda(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        return self.forward_oot(positions, query, key)
 
 
 __all__ = ["RotaryEmbeddingFL"]

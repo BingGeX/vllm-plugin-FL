@@ -1,98 +1,391 @@
 # Copyright (c) 2025 BAAI. All rights reserved.
 
-"""
-Tests for worker module.
-
-Note: These tests require vllm >= 0.13.0 with profiler support.
-"""
+"""Contract tests for the FL adaptation of vLLM v0.28.0 GPUWorker."""
 
 import pytest
 
+from tests.utils.device_utils import skip_if_not_nvidia
 
-def has_vllm_profiler():
-    """Check if vllm profiler is available."""
+
+def has_vllm_worker() -> bool:
     try:
-        from vllm.profiler.wrapper import TorchProfilerWrapper  # noqa: F401
+        from vllm_fl.worker.worker import WorkerFL  # noqa: F401
 
         return True
-    except ImportError:
+    except (ImportError, AttributeError):
         return False
 
 
-# Skip all tests if vllm profiler is not available
+def has_native_cuda_extension() -> bool:
+    """True only on NVIDIA builds that ship vllm._C_stable_libtorch."""
+    try:
+        import vllm._C_stable_libtorch  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    not has_vllm_profiler(),
-    reason="vllm.profiler.wrapper not available (requires vllm >= 0.13.0)",
+    not has_vllm_worker(), reason="vllm_fl.worker.worker is unavailable"
+)
+
+# CoreX/empty images expose torch.cuda but lack the native NVIDIA extension.
+# Gate nvidia-only tests on the extension so skip_if_not_nvidia alone is not
+# enough when FL_BACKEND is unset and cuda.is_available() is True.
+skip_if_no_native_cuda_ext = pytest.mark.skipif(
+    not has_native_cuda_extension(),
+    reason="Requires native vLLM CUDA extension (vllm._C_stable_libtorch)",
 )
 
 
-class TestMemorySnapshot:
-    """Test MemorySnapshot dataclass behavior."""
+@pytest.mark.parametrize("tag", ["weights", "kv_cache"])
+def test_ascend_does_not_request_cuda_memory_pool(monkeypatch, tag):
+    from types import SimpleNamespace
 
-    def test_default_values_without_auto_measure(self):
-        """Test MemorySnapshot initializes with correct default values."""
-        from vllm_fl.worker.worker import MemorySnapshot
+    from vllm_fl.worker import worker as worker_module
 
-        snapshot = MemorySnapshot(auto_measure=False)
+    monkeypatch.setattr(
+        worker_module, "current_platform", SimpleNamespace(device_type="npu")
+    )
 
-        assert snapshot.torch_peak == 0
-        assert snapshot.free_memory == 0
-        assert snapshot.total_memory == 0
-        assert snapshot.cuda_memory == 0
-        assert snapshot.torch_memory == 0
-        assert snapshot.non_torch_memory == 0
+    def unavailable_allocator():
+        raise AssertionError("Ascend must not request the CUDA allocator")
 
-    def test_subtraction_computes_difference(self):
-        """Test MemorySnapshot subtraction operator computes correct differences."""
-        from vllm_fl.worker.worker import MemorySnapshot
-
-        snapshot1 = MemorySnapshot(auto_measure=False)
-        snapshot1.torch_peak = 1000
-        snapshot1.free_memory = 5000
-        snapshot1.total_memory = 10000
-        snapshot1.cuda_memory = 5000
-        snapshot1.torch_memory = 3000
-        snapshot1.non_torch_memory = 2000
-        snapshot1.timestamp = 10.0
-
-        snapshot2 = MemorySnapshot(auto_measure=False)
-        snapshot2.torch_peak = 500
-        snapshot2.free_memory = 6000
-        snapshot2.total_memory = 10000
-        snapshot2.cuda_memory = 4000
-        snapshot2.torch_memory = 2000
-        snapshot2.non_torch_memory = 2000
-        snapshot2.timestamp = 5.0
-
-        diff = snapshot1 - snapshot2
-
-        assert diff.torch_peak == 500
-        assert diff.free_memory == -1000
-        assert diff.cuda_memory == 1000
-        assert diff.torch_memory == 1000
-        assert diff.timestamp == 5.0
+    monkeypatch.setattr(
+        worker_module, "get_mem_allocator_instance", unavailable_allocator
+    )
+    worker = worker_module.WorkerFL.__new__(worker_module.WorkerFL)
+    with worker._maybe_get_memory_pool_context(tag):
+        pass
 
 
-class TestMemoryProfilingResult:
-    """Test MemoryProfilingResult dataclass behavior."""
+def test_sunrise_process_group_uses_pccl(monkeypatch):
+    from vllm_fl.worker import worker as worker_module
 
-    def test_default_values(self):
-        """Test MemoryProfilingResult initializes with correct default values."""
-        from vllm_fl.worker.worker import MemoryProfilingResult
+    monkeypatch.setattr(worker_module.current_platform, "device_type", "ptpu")
 
-        result = MemoryProfilingResult()
+    assert worker_module._normalize_process_group_backend("flagcx") == "pccl"
+    assert worker_module._normalize_process_group_backend("nccl") == "pccl"
+    assert worker_module._normalize_process_group_backend("gloo") == "gloo"
 
-        assert result.weights_memory == 0
-        assert result.torch_peak_increase == 0
-        assert result.non_torch_increase == 0
-        assert result.non_kv_cache_memory == 0
-        assert result.profile_time == 0.0
 
-    def test_creates_default_snapshots(self):
-        """Test MemoryProfilingResult creates default snapshot objects."""
-        from vllm_fl.worker.worker import MemoryProfilingResult
+@pytest.mark.parametrize(
+    "device_type,flagcx_backend",
+    [
+        ("npu", "hccl"),
+        ("cuda", "flagcx"),
+        ("musa", "flagcx"),
+        ("maca", "flagcx"),
+        ("cpu", "flagcx"),
+    ],
+)
+@pytest.mark.parametrize("backend", ["flagcx", "nccl", "pccl", "hccl", "gloo"])
+def test_sunrise_process_group_mapping_is_ptpu_only(
+    monkeypatch, device_type, flagcx_backend, backend
+):
+    from vllm_fl.worker import worker as worker_module
 
-        result = MemoryProfilingResult()
+    monkeypatch.setattr(worker_module.current_platform, "device_type", device_type)
 
-        assert result.before_profile is not None
-        assert result.after_profile is not None
+    # Preserve Ascend's own native process group when TP collectives use FlagCX.
+    expected = flagcx_backend if backend == "flagcx" else backend
+    assert worker_module._normalize_process_group_backend(backend) == expected
+
+
+def test_worker_keeps_target_lifecycle_contract():
+    from vllm_fl.worker.worker import WorkerFL
+
+    required_methods = {
+        "sleep",
+        "wake_up",
+        "checkpoint_prepare",
+        "checkpoint_restore",
+        "init_weight_transfer_engine",
+        "start_weight_update",
+        "start_draft_weight_update",
+        "update_weights",
+        "finish_weight_update",
+        "elastic_ep_execute",
+        "shutdown",
+    }
+
+    missing = sorted(name for name in required_methods if not hasattr(WorkerFL, name))
+    assert not missing, f"WorkerFL is missing v0.28.0 methods: {missing}"
+
+
+def test_worker_selects_v1_or_v2_model_runner():
+    import inspect
+
+    from vllm_fl.worker.worker import WorkerFL
+
+    source = inspect.getsource(WorkerFL.init_device)
+    assert "GPUModelRunnerV2" in source
+    assert "vllm_fl.worker.model_runner" in source
+    assert "ModelRunnerFL" in source
+
+
+def test_platform_accepts_v2_model_runner(monkeypatch):
+    from types import SimpleNamespace
+
+    from vllm.config import CUDAGraphMode
+
+    from vllm_fl.platform import PlatformFL
+
+    monkeypatch.setattr(PlatformFL, "device_type", "cuda")
+    parallel_config = SimpleNamespace(
+        worker_cls=None,
+        all2all_backend=None,
+        data_parallel_size=1,
+    )
+    vllm_config = SimpleNamespace(
+        parallel_config=parallel_config,
+        model_config=None,
+        scheduler_config=SimpleNamespace(),
+        cache_config=None,
+        compilation_config=SimpleNamespace(
+            compile_sizes=[],
+            cudagraph_mode=CUDAGraphMode.NONE,
+        ),
+        attention_config=None,
+        use_v2_model_runner=True,
+    )
+
+    PlatformFL.check_and_update_config(vllm_config)
+
+    assert parallel_config.worker_cls == "vllm_fl.worker.worker.WorkerFL"
+
+
+@skip_if_not_nvidia
+@skip_if_no_native_cuda_ext
+def test_nvidia_platform_keeps_native_cuda_semantics():
+    pytest.importorskip("vllm._C_stable_libtorch", exc_type=ImportError)
+    from vllm.platforms import PlatformEnum
+    from vllm.platforms.cuda import CudaPlatform
+
+    from vllm_fl.nvidia_platform import NvidiaPlatformFL
+
+    assert issubclass(NvidiaPlatformFL, CudaPlatform)
+    assert NvidiaPlatformFL._enum == PlatformEnum.CUDA
+    platform = NvidiaPlatformFL()
+    assert platform.is_cuda()
+    assert not platform.is_out_of_tree()
+
+
+@skip_if_not_nvidia
+@skip_if_no_native_cuda_ext
+def test_nvidia_platform_selects_target_version_worker_wrapper(monkeypatch):
+    pytest.importorskip("vllm._C_stable_libtorch", exc_type=ImportError)
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from vllm.platforms.cuda import CudaPlatform
+
+    from vllm_fl.nvidia_platform import NvidiaPlatformFL
+
+    parallel_config = SimpleNamespace(
+        worker_cls=None,
+        disable_custom_all_reduce=True,
+    )
+    vllm_config = SimpleNamespace(parallel_config=parallel_config)
+
+    with monkeypatch.context() as state:
+        state.setattr(NvidiaPlatformFL, "dist_backend", NvidiaPlatformFL.dist_backend)
+        state.delenv("FLAGCX_PATH", raising=False)
+        with patch.object(CudaPlatform, "check_and_update_config") as native_update:
+            NvidiaPlatformFL.check_and_update_config(vllm_config)
+
+        assert NvidiaPlatformFL.dist_backend == CudaPlatform.dist_backend
+
+    assert parallel_config.worker_cls == "vllm_fl.worker.worker.NvidiaWorkerFL"
+    assert parallel_config.disable_custom_all_reduce is True
+    native_update.assert_called_once_with(vllm_config)
+
+
+@skip_if_not_nvidia
+@skip_if_no_native_cuda_ext
+def test_nvidia_platform_keeps_native_cuda_communication(monkeypatch):
+    pytest.importorskip("vllm._C_stable_libtorch", exc_type=ImportError)
+    from unittest.mock import patch
+
+    from vllm.platforms.cuda import CudaPlatform
+
+    from vllm_fl.nvidia_platform import NvidiaPlatformFL
+
+    with monkeypatch.context() as state:
+        state.setattr(NvidiaPlatformFL, "dist_backend", NvidiaPlatformFL.dist_backend)
+        state.delenv("FLAGCX_PATH", raising=False)
+        with (
+            patch.object(
+                CudaPlatform,
+                "get_device_communicator_cls",
+                return_value="native.cuda.Communicator",
+            ) as native_communicator,
+            patch.object(
+                CudaPlatform,
+                "use_custom_allreduce",
+                return_value=True,
+            ) as native_custom_allreduce,
+        ):
+            communicator = NvidiaPlatformFL.get_device_communicator_cls()
+            use_custom_allreduce = NvidiaPlatformFL.use_custom_allreduce()
+
+        assert NvidiaPlatformFL.dist_backend == CudaPlatform.dist_backend
+
+    assert communicator == "native.cuda.Communicator"
+    assert use_custom_allreduce is True
+    native_communicator.assert_called_once_with()
+    native_custom_allreduce.assert_called_once_with()
+
+
+@skip_if_not_nvidia
+@skip_if_no_native_cuda_ext
+def test_nvidia_platform_uses_flagcx_when_configured(monkeypatch):
+    pytest.importorskip("vllm._C_stable_libtorch", exc_type=ImportError)
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from vllm.platforms.cuda import CudaPlatform
+
+    from vllm_fl.nvidia_platform import NvidiaPlatformFL
+
+    parallel_config = SimpleNamespace(
+        worker_cls=None,
+        disable_custom_all_reduce=False,
+    )
+    vllm_config = SimpleNamespace(parallel_config=parallel_config)
+
+    # Importing the platform before changing the environment mirrors unit tests
+    # that dynamically select FlagCX in an already-running Python process.
+    with monkeypatch.context() as state:
+        state.setattr(NvidiaPlatformFL, "dist_backend", NvidiaPlatformFL.dist_backend)
+        state.setenv("FLAGCX_PATH", "/opt/flagcx")
+        with patch.object(CudaPlatform, "check_and_update_config") as native_update:
+            NvidiaPlatformFL.check_and_update_config(vllm_config)
+
+        assert NvidiaPlatformFL.dist_backend == "flagcx"
+        assert parallel_config.disable_custom_all_reduce is True
+        assert (
+            NvidiaPlatformFL.get_device_communicator_cls()
+            == "vllm_fl.distributed.nvidia_communicator.NvidiaCommunicatorFL"
+        )
+        assert NvidiaPlatformFL.use_custom_allreduce() is False
+
+    native_update.assert_called_once_with(vllm_config)
+
+
+@skip_if_not_nvidia
+@skip_if_no_native_cuda_ext
+def test_nvidia_platform_uses_native_attention_by_default(monkeypatch):
+    pytest.importorskip("vllm._C_stable_libtorch", exc_type=ImportError)
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from vllm.platforms.cuda import CudaPlatform
+
+    from vllm_fl.nvidia_platform import NvidiaPlatformFL
+
+    monkeypatch.delenv("VLLM_FL_USE_FLAGGEMS_ATTN", raising=False)
+    selector = SimpleNamespace(use_mla=False, use_sparse=False)
+
+    with patch.object(
+        CudaPlatform,
+        "get_attn_backend_cls",
+        return_value="native.attention.Backend",
+    ) as native_select:
+        result = NvidiaPlatformFL.get_attn_backend_cls(None, selector, 32)
+
+    assert result == "native.attention.Backend"
+    native_select.assert_called_once_with(None, selector, 32)
+
+
+@skip_if_not_nvidia
+@skip_if_no_native_cuda_ext
+def test_nvidia_platform_honors_explicit_flaggems_attention(monkeypatch):
+    pytest.importorskip("vllm._C_stable_libtorch", exc_type=ImportError)
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from vllm_fl.dispatch.backends.flaggems.flaggems import FlagGemsBackend
+    from vllm_fl.nvidia_platform import NvidiaPlatformFL
+
+    monkeypatch.setenv("VLLM_FL_USE_FLAGGEMS_ATTN", "1")
+    selector = SimpleNamespace(use_mla=False, use_sparse=False)
+    backend_path = (
+        "vllm_fl.dispatch.backends.flaggems.impl.attention.AttentionFLBackend"
+    )
+
+    with patch.object(
+        FlagGemsBackend,
+        "attention_backend",
+        return_value=backend_path,
+    ) as flaggems_select:
+        result = NvidiaPlatformFL.get_attn_backend_cls(None, selector, 32)
+
+    assert result == backend_path
+    flaggems_select.assert_called_once_with(use_mla=False, use_sparse=False)
+
+
+def test_nvidia_worker_delegates_to_target_version_gpu_worker():
+    from vllm.v1.worker.gpu_worker import Worker as NativeGPUWorker
+
+    from vllm_fl.worker.worker import NvidiaWorkerFL
+
+    assert issubclass(NvidiaWorkerFL, NativeGPUWorker)
+
+
+def test_native_runner_io_bridge_replaces_only_inference_mode():
+    import torch
+
+    from vllm_fl.dispatch.io_common import set_io_active
+    from vllm_fl.worker.worker import _install_native_runner_io_methods
+
+    class NativeRunner:
+        @torch.inference_mode()
+        def execute_model(self):
+            return torch.is_inference_mode_enabled(), torch.is_grad_enabled()
+
+        @torch.inference_mode()
+        def sample_tokens(self):
+            return torch.is_inference_mode_enabled(), torch.is_grad_enabled()
+
+    runner = NativeRunner()
+    _install_native_runner_io_methods(runner)
+
+    try:
+        set_io_active(True)
+        assert runner.execute_model() == (False, False)
+        assert runner.sample_tokens() == (False, False)
+
+        set_io_active(False)
+        assert runner.execute_model() == (True, False)
+    finally:
+        set_io_active(False)
+
+
+def test_nvidia_worker_initializes_io_dump_once_after_model_load():
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    from vllm_fl.worker.worker import NvidiaWorkerFL
+
+    worker = object.__new__(NvidiaWorkerFL)
+    worker._fl_io_dump_initialized = False
+    worker.model_config = SimpleNamespace(enforce_eager=True)
+    model = object()
+    worker.model_runner = SimpleNamespace(get_model=Mock(return_value=model))
+
+    with (
+        patch("vllm_fl.dispatch.io_dumper.init_io_dump_from_env") as init_io_dump,
+        patch("vllm_fl.dispatch.io_dumper.is_dump_enabled", return_value=True),
+        patch("vllm_fl.dispatch.io_dumper.register_io_module_hooks") as register_hooks,
+        patch(
+            "vllm_fl.worker.worker._install_native_runner_io_methods"
+        ) as install_methods,
+    ):
+        worker._ensure_io_dump_initialized()
+        worker._ensure_io_dump_initialized()
+
+    init_io_dump.assert_called_once_with(True)
+    install_methods.assert_called_once_with(worker.model_runner)
+    register_hooks.assert_called_once_with(model)

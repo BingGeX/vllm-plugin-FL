@@ -1,5 +1,5 @@
 # Copyright (c) 2025 BAAI. All rights reserved.
-# Adapted from vllm/model_executor/layers/fused_moe/layer.py (v0.24.0)
+# Adapted from vllm/model_executor/layers/fused_moe/layer.py (v0.28.0)
 
 import vllm.model_executor.layers.fused_moe as _fused_moe_pkg
 
@@ -7,24 +7,23 @@ import vllm.model_executor.layers.fused_moe as _fused_moe_pkg
 # custom_ops.py patches _fused_moe_pkg.FusedMoE = FusedMoEFL at runtime,
 # so calling _fused_moe_pkg.FusedMoE() inside FusedMoEFL would recurse
 # infinitely.  Capturing it here breaks the cycle.
-# vLLM 0.28 API compatibility (NOT MetaX-specific): 0.28 moved the factory to
-# `FusedMoEFactory` and left `FusedMoE` behind as the legacy alias.  Resolve
-# the new name first so the same code path works on both releases; the
-# `getattr`/fallback pair is a version shim shared by all backends.
-_OrigFusedMoE = getattr(_fused_moe_pkg, "FusedMoEFactory", None)
-if _OrigFusedMoE is None:  # vllm <= 0.24 named this factory FusedMoE
-    _OrigFusedMoE = _fused_moe_pkg.FusedMoE
-
+_OrigFusedMoE = _fused_moe_pkg.FusedMoE
+# vLLM 0.28 API compatibility (shared version shim, not MetaX-specific):
+# 0.28 introduced `FusedMoEFactory` and kept `FusedMoE` as a legacy alias;
+# upstream's 0.4.0-dev branch calls the factory through `_OrigFusedMoEFactory`.
+# Resolve the new name first when present so both call sites work.
+_OrigFusedMoEFactory = (
+    getattr(_fused_moe_pkg, "FusedMoEFactory", None) or _fused_moe_pkg.FusedMoE
+)
+from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.config import FusedMoEConfig
 from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner
 from vllm.model_executor.layers.fused_moe.unquantized_fused_moe_method import (
     UnquantizedFusedMoEMethod,
 )
-from vllm.logger import init_logger
 
 from .fused_moe_utils import select_unquantized_moe_backend_oot
 from vllm_fl.ops.fused_moe.router import replace_router_with_fl
-
 
 logger = init_logger(__name__)
 
@@ -48,35 +47,23 @@ class UnquantizedFusedMoEMethodFL(UnquantizedFusedMoEMethod):
         return self.moe_kernel.is_monolithic
 
 
-def FusedMoEFL(*args, **kwargs) -> MoERunner:
+def FusedMoEFactoryFL(*args, **kwargs) -> MoERunner:
     """
-    OOT factory replacement for FusedMoE (vllm >= 0.24.0).
+    OOT replacement for the vLLM v0.28.0 ``FusedMoEFactory``.
 
-    In vllm 0.24.0, FusedMoE changed from a class to a factory function that
-    returns a MoERunner instance.  FusedMoEFL mirrors this pattern: it
-    delegates to the standard FusedMoE() factory, replaces the router, and
-    substitutes the FL experts only for unquantized MoE.
-
-    Registration: op_registry_oot maps FusedMoE -> FusedMoEFL so that all
-    MoE layers in a model use the FL router transparently.
+    The upstream factory remains responsible for constructing the router,
+    expert mapping, quantization method and runner. FL only replaces the
+    unquantized method and routing hooks it owns.
     """
-    # 1. Build the standard MoERunner via the upstream factory.
-    #    Use _OrigFusedMoE (captured at import time, before monkey-patching)
-    #    to avoid infinite recursion when custom_ops.py has already replaced
-    #    _fused_moe_pkg.FusedMoE with FusedMoEFL.
-    runner: MoERunner = _OrigFusedMoE(*args, **kwargs)
+    runner: MoERunner = _OrigFusedMoEFactory(*args, **kwargs)
 
-    # 2. Replace only an upstream unquantized method with the FL version.
-    # Quantized methods own their weight/activation scaling metadata and must
-    # remain attached to the runner.
-    if isinstance(runner._quant_method, UnquantizedFusedMoEMethod):
+    # Quantized models must keep the quantization method chosen upstream.
+    if isinstance(
+        runner.routed_experts.quant_method,
+        UnquantizedFusedMoEMethod,
+    ):
         fl_quant_method = UnquantizedFusedMoEMethodFL(runner.moe_config)
         runner._replace_quant_method(fl_quant_method)
-    else:
-        logger.info_once(
-            "Preserving upstream quantized MoE method %s in FusedMoEFL.",
-            type(runner._quant_method).__name__,
-        )
 
     # 3. Replace router _compute_routing with FL version via monkey-patch.
     #    replace_router_with_fl() patches the class method so the router
@@ -88,4 +75,12 @@ def FusedMoEFL(*args, **kwargs) -> MoERunner:
     return runner
 
 
-__all__ = ["FusedMoEFL", "UnquantizedFusedMoEMethodFL"]
+# Compatibility alias for downstream code that used the old FL name.
+FusedMoEFL = FusedMoEFactoryFL
+
+
+__all__ = [
+    "FusedMoEFactoryFL",
+    "FusedMoEFL",
+    "UnquantizedFusedMoEMethodFL",
+]
