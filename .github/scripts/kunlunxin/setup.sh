@@ -11,7 +11,6 @@ fi
 : "${VLLM_PLUGINS:?VLLM_PLUGINS is not set}"
 : "${FLAGCX_PATH:?FLAGCX_PATH is not set}"
 : "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is not set}"
-: "${USE_RESHAPE_AND_CACHE_FLASH:?USE_RESHAPE_AND_CACHE_FLASH is not set}"
 
 git config --global --add safe.directory "$(pwd)"
 
@@ -29,7 +28,6 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     VLLM_PLUGINS \
     FLAGCX_PATH \
     CUDA_VISIBLE_DEVICES \
-    USE_RESHAPE_AND_CACHE_FLASH \
     VLLM_ALLOW_LONG_MAX_MODEL_LEN \
     VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS; do
     echo "${name}=${!name-}" >> "${GITHUB_ENV}"
@@ -54,14 +52,20 @@ import vllm
 import vllm_fl
 from vllm.platforms import current_platform
 
-print(f"vLLM import ok: {vllm.__version__}")
+_vlm_ver = vllm.__version__
+assert _vlm_ver.startswith("0.28") and "empty" in _vlm_ver, f"[kunlunxin/setup] vllm version mismatch: {_vlm_ver!r} (expect 0.28.*+empty)"
+assert torch.cuda.is_available(), "Kunlunxin accelerator is unavailable"
+assert torch.cuda.device_count() >= 4, torch.cuda.device_count()
+assert current_platform.device_type == "cuda", current_platform.device_type
+assert current_platform.vendor_name == "kunlunxin", current_platform.vendor_name
+print(f"vLLM import ok: {_vlm_ver}")
 print(f"vLLM-FL import ok: {vllm_fl.__file__}")
 print(f"FlagGems import ok: {getattr(flag_gems, '__version__', 'unknown')}")
 print(f"FlagGems vendor: {getattr(flag_gems, 'vendor_name', 'auto-detected')}")
 print(f"Torch import ok: {torch.__version__}")
 print(f"CUDA-compatible accelerator available: {torch.cuda.is_available()}")
 print(f"CUDA-compatible accelerator count: {torch.cuda.device_count()}")
-print(f"Platform: {current_platform}")
+print(f"Platform: {current_platform} vendor={current_platform.vendor_name}")
 
 try:
     import flagcx  # noqa: F401
