@@ -189,7 +189,7 @@ def _patch_fused_moe_factory() -> None:
     for _mod in (_fused_moe_layer, _fused_moe_pkg):
         for _n in _names:
             if hasattr(_mod, _n):
-                setattr(_mod, _n, FusedMoEFL)
+                setattr(_mod, _n, FusedMoEFactoryFL)
 
     # Model modules can import the factory before worker initialization. Patch
     # those cached module globals as well, but only when they still point to
@@ -201,6 +201,6 @@ def _patch_fused_moe_factory() -> None:
         for _n in _names:
             _orig = originals.get(_n)
             if _orig is not None and vars(module).get(_n) is _orig:
-                setattr(module, _n, FusedMoEFL)
+                setattr(module, _n, FusedMoEFactoryFL)
 
     logger.info("Monkey-patched FusedMoE/FusedMoEFactory -> FusedMoEFL")

@@ -390,7 +390,7 @@ class PlatformFL(Platform):
                     or _fl_cc.cudagraph_mode == CUDAGraphMode.NONE
                 ):
                     _fl_cc.cudagraph_mode = CUDAGraphMode.PIECEWISE
-                if not _fl_cc.cudagraph_capture_sizes:
+                if not getattr(_fl_cc, "cudagraph_capture_sizes", None):
                     _fl_cc.cudagraph_capture_sizes = [
                         1, 2, 4, 8, 16, 32, 64, 128, 256
                     ]
