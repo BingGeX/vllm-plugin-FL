@@ -304,8 +304,6 @@ from vllm_fl.worker.common_attention_metadata import (
 )
 from vllm_fl.worker.kv_cache_utils import bind_kv_cache
 
-GraphWrapper = GraphWrapper
-
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
     from vllm.v1.spec_decode.ngram_proposer import NgramProposer

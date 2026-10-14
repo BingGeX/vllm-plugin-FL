@@ -299,7 +299,14 @@ class DeviceInfo:
 
     @property
     def device_type(self):
-        return self.device.name
+        # FlagGems DeviceDetector().name may be empty on some runtimes (for
+        # example CI containers where vendor detection is not wired up).
+        # Fall back to the static VENDOR_DEVICE_MAP entry so that the
+        # reported device_type stays meaningful.
+        detected = self.device.name
+        if detected:
+            return detected
+        return get_device_type(self.vendor_name)
 
     @property
     def torch_device_fn(self):
