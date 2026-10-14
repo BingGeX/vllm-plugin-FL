@@ -76,9 +76,7 @@ def find_shims(shims_dir: Path) -> list[str]:
     if not shims_dir.is_dir():
         raise SystemExit(f"[fl-shims] shims directory not found: {shims_dir}")
     stems = [
-        p.stem
-        for p in sorted(shims_dir.glob(f"{SHIM_PREFIX}*.py"))
-        if p.is_file()
+        p.stem for p in sorted(shims_dir.glob(f"{SHIM_PREFIX}*.py")) if p.is_file()
     ]
     if not stems:
         raise SystemExit(
@@ -89,7 +87,7 @@ def find_shims(shims_dir: Path) -> list[str]:
 
 def pth_filename(stem: str, pth_prefix: str) -> str:
     """``_fl_metax_topk_compat`` -> ``zz_fl_metax_topk_compat.pth``."""
-    short = stem[len(SHIM_PREFIX):] if stem.startswith(SHIM_PREFIX) else stem
+    short = stem[len(SHIM_PREFIX) :] if stem.startswith(SHIM_PREFIX) else stem
     return f"{pth_prefix}{short}.pth"
 
 
@@ -99,10 +97,7 @@ def pth_body(shims_dir: Path, stem: str, master_switch: str) -> str:
         f"os.environ.get({json.dumps(master_switch)},'1')!='0' "
         f"and __import__({json.dumps(stem)})"
     )
-    line = (
-        f"import os,sys; sys.path.insert(0, {json.dumps(str(shims_dir))}); "
-        f"{guard}"
-    )
+    line = f"import os,sys; sys.path.insert(0, {json.dumps(str(shims_dir))}); {guard}"
     return f"{MARKER}\n{line}\n"
 
 
@@ -116,6 +111,7 @@ def detect_site_packages() -> Path:
     for candidate in _site.getsitepackages():
         return Path(candidate)
     return Path(_site.getusersitepackages())
+
 
 def is_managed(path: Path) -> bool:
     """True when ``path`` is a ``.pth`` this script wrote."""
@@ -218,22 +214,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     shims_dir = (
-        args.shims_dir
-        if args.shims_dir
-        else repo_root() / "vllm_fl" / "_fl_boot_shims"
+        args.shims_dir if args.shims_dir else repo_root() / "vllm_fl" / "_fl_boot_shims"
     ).resolve()
     site_packages = (
         args.site_packages if args.site_packages else detect_site_packages()
     ).resolve()
 
-    if not args.dry_run and not args.check and not args.uninstall:
-        if not os.access(site_packages, os.W_OK):
-            print(f"[fl-shims] ERROR: {site_packages} is not writable", file=sys.stderr)
-            return 2
+    if (
+        not args.dry_run
+        and not args.check
+        and not args.uninstall
+        and not os.access(site_packages, os.W_OK)
+    ):
+        print(f"[fl-shims] ERROR: {site_packages} is not writable", file=sys.stderr)
+        return 2
 
-    writes = plan_writes(
-        shims_dir, site_packages, args.pth_prefix, args.master_switch
-    )
+    writes = plan_writes(shims_dir, site_packages, args.pth_prefix, args.master_switch)
     print(f"[fl-shims] shims-dir    : {shims_dir}")
     print(f"[fl-shims] site-packages: {site_packages}")
     print(f"[fl-shims] hooks        : {len(writes)}")

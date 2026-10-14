@@ -441,9 +441,7 @@ def _topk_topp_kernel(LOGITS, LOGITS_STRIDE_0, BUFFER, PERCENTILE_TO_STD_TABLE, 
                     num_keep = num_duplicate_logit - tl.cast((p_pivots_sum - p) / min_larger_prob, tl.uint32)
                     num_kept = tl.zeros((), dtype=tl.uint32)
                     final_pivot = tl.log(p_pivot * sum_exp_logits) + max_sample
-        if not final_pivot < max_logit:
-            final_pivot = -float('inf')
-        elif final_pivot != -float('inf'):
+        if final_pivot < max_logit and final_pivot != -float('inf'):
             for i in range(0, NUM_TILES):
                 offs_n = i * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
                 mask_n = offs_n < VOCAB_SIZE

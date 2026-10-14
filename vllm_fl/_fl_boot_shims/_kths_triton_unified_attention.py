@@ -204,7 +204,18 @@ def unified_attention(q, k, v, out, cu_seqlens_q, max_seqlen_q, seqused_k, max_s
         chunk_lookback = -1
     TILE_SIZE_PREFILL = _get_tile_size(head_size, sliding_window_val, q.element_size(), is_prefill=True)
     TILE_SIZE_DECODE = _get_tile_size(head_size, sliding_window_val, q.element_size(), is_prefill=False)
-    use_3d = not (seq_threshold_3D is None or num_par_softmax_segments is None or softmax_segm_output is None or (softmax_segm_max is None) or (softmax_segm_expsum is None) or (max_seqlen_q > 1) or (num_seqs > seq_threshold_3D) or is_batch_invariant)
+    use_3d = False
+    if (
+        seq_threshold_3D is not None
+        and num_par_softmax_segments is not None
+        and softmax_segm_output is not None
+        and softmax_segm_max is not None
+        and softmax_segm_expsum is not None
+        and max_seqlen_q <= 1
+        and num_seqs <= seq_threshold_3D
+        and not is_batch_invariant
+    ):
+        use_3d = True
     if use_per_token_head_scales:
         ks_strides = k_scale_cache.stride()
         vs_strides = v_scale_cache.stride()
