@@ -62,19 +62,19 @@ class PlatformFL(Platform):
     _enum = PlatformEnum.OOT
     device_info = DeviceInfo()
     vendor_name = device_info.vendor_name
-    device_type = get_device_type(vendor_name)
+    # Resolve device_type once and reuse the result below. The runtime probe
+    # (FlagGems DeviceDetector().name) reports nothing on some runtimes, e.g.
+    # CI containers where vendor detection is not wired up; an empty probe must
+    # never overwrite the static VENDOR_DEVICE_MAP entry resolved here.
+    device_type = device_info.device_type or get_device_type(vendor_name)
     device_name = get_device_name(vendor_name)
     # cuda_alike (nvidia/metax): device_name = vendor_name (not used in torch.device)
     # non-cuda_alike (iluvatar/ascend): device_name = device_type (used in torch.device)
     device_name = (
-        device_info.vendor_name
-        if (
-            device_info.device_type == "cuda"
-            and device_info.vendor_name not in ("iluvatar", "hygon")
-        )
-        else device_info.device_type
+        vendor_name
+        if (device_type == "cuda" and vendor_name not in ("iluvatar", "hygon"))
+        else device_type
     )
-    device_type = device_info.device_type
     dispatch_key = device_info.dispatch_key
     torch_device_fn = device_info.torch_device_fn
     ray_device_key: str = "GPU"

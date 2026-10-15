@@ -89,4 +89,11 @@ def FusedMoEFL(*args, **kwargs) -> MoERunner:
     return runner
 
 
-__all__ = ["FusedMoEFL", "UnquantizedFusedMoEMethodFL"]
+# Backwards-compatible alias. The factory was renamed FusedMoEFactoryFL ->
+# FusedMoEFL, but vllm_fl/ops/fused_moe/__init__.py (and therefore
+# `from vllm_fl.ops.fused_moe import *` in custom_ops.py) still imports the old
+# spelling. Keep both names bound to the same object so importing the package
+# does not raise ImportError.
+FusedMoEFactoryFL = FusedMoEFL
+
+__all__ = ["FusedMoEFL", "FusedMoEFactoryFL", "UnquantizedFusedMoEMethodFL"]
