@@ -170,34 +170,155 @@ def _init_vendor_device():
 
 _register_in_progress = False
 
+# vLLM resolves ``vllm.platforms.current_platform`` from this qualname, so the
+# value lives in one place: register() must always hand vLLM a non-None string.
+_PLATFORM_QUALNAME = "vllm_fl.platform.PlatformFL"
+
+
+def _preload_platform_class():
+    """Import PlatformFL early so a nested resolution cannot fail mid-way.
+
+    The class body resolves the vendor/device_type from the FlagGems detector.
+    Importing it *inside* register() before the side effects below means a
+    re-entrant resolve (which imports ``vllm.model_executor.layers`` and
+    therefore ``vllm.platforms``) can instantiate it immediately instead of
+    failing while this module is still executing.
+    """
+    try:
+        from vllm_fl.platform import PlatformFL
+
+        return PlatformFL
+    except Exception as _platform_exc:  # pragma: no cover - vendor dependent
+        logger.debug("[vllm_fl] PlatformFL unavailable: %s", _platform_exc)
+        return None
+
+
+def _run_best_effort(*steps) -> None:
+    """Run compatibility hooks without ever letting one abort registration."""
+    for step in steps:
+        try:
+            step()
+        except Exception as _step_exc:  # pragma: no cover - vendor dependent
+            logger.warning("[vllm_fl] %s failed: %s", step.__name__, _step_exc)
+
+
+def _is_fallback_platform(platform) -> bool:
+    """True when the cached platform cannot serve an accelerator.
+
+    The class-name check is kept as a fallback because the import path of
+    ``UnspecifiedPlatform`` has moved between vLLM releases, and a platform
+    that reports an empty ``device_type`` is unusable whatever it is called.
+    """
+    try:
+        from vllm.platforms.interface import UnspecifiedPlatform
+
+        if isinstance(platform, UnspecifiedPlatform):
+            return True
+    except Exception as _iface_exc:  # pragma: no cover - layout dependent
+        logger.debug("[vllm_fl] UnspecifiedPlatform unavailable: %s", _iface_exc)
+    if type(platform).__name__ == "UnspecifiedPlatform":
+        return True
+    return not getattr(platform, "device_type", "")
+
+
+def _force_adopt_platform() -> bool:
+    """Re-assert PlatformFL when vLLM already cached a fallback platform.
+
+    ``vllm.platforms`` resolves ``current_platform`` lazily but **only once**:
+    its module-level ``__getattr__`` stores the first result in the global
+    ``_current_platform``.  That resolution is re-entrant, and the *outer*
+    resolution wins because it performs the final assignment.  So if any step of
+    the outer ``register()`` raises, vLLM wraps the plugin callable in
+    ``except Exception: pass``, counts this plugin as "not activated", and
+    overwrites the good platform a nested resolution already installed with
+    ``UnspecifiedPlatform``.
+
+    Reading the module global ``_current_platform`` (not the ``current_platform``
+    attribute) deliberately avoids triggering yet another nested resolution,
+    and the assignment goes through vLLM's module ``__setattr__``, which is the
+    supported way for a plugin to set the platform.
+    """
+    try:
+        import vllm.platforms as _platforms
+    except Exception as _platform_exc:  # pragma: no cover - version dependent
+        logger.debug("[vllm_fl] cannot inspect current_platform: %s", _platform_exc)
+        return False
+
+    current = getattr(_platforms, "_current_platform", None)
+    if current is None or not _is_fallback_platform(current):
+        # Nothing resolved yet (vLLM will call register() again), or a real
+        # platform is already in place.
+        return False
+
+    _platform_cls = _preload_platform_class()
+    if _platform_cls is None:
+        return False
+
+    _platforms.current_platform = _platform_cls()
+    logger.info(
+        "[vllm_fl] vLLM had cached %s; re-adopted %s",
+        type(current).__name__,
+        _PLATFORM_QUALNAME,
+    )
+    return True
+
 
 def register():
-    """Register the FL platform."""
+    """Register the FL platform.
+
+    Must never raise and never return ``None``: vLLM 0.28 calls this entry
+    point from ``resolve_current_platform_cls_qualname()`` inside a bare
+    ``except Exception: pass``, so an escaping exception surfaces not as a
+    traceback but as ``current_platform`` silently pinned to
+    ``UnspecifiedPlatform`` for the life of the process.  Every optional patch
+    is therefore best-effort -- a patch module that only ships on some plugin
+    revisions must degrade to a debug log, not abort platform registration.
+    """
     global _register_in_progress
     if _register_in_progress:
         # Re-entrant call while the outer register() is still installing
-        # aliases / vendor hooks (vLLM loads platform plugins more than once).
-        return "vllm_fl.platform.PlatformFL"
+        # aliases / vendor hooks (vLLM loads platform plugins more than once,
+        # and register() itself can trigger a nested platform resolution).
+        return _PLATFORM_QUALNAME
     _register_in_progress = True
     try:
-        _install_xpu_device_guard()
-        _install_fla_relocation_alias()
-        _init_vendor_device()
+        _preload_platform_class()
+        _run_best_effort(
+            _install_xpu_device_guard,
+            _install_fla_relocation_alias,
+            _init_vendor_device,
+        )
 
         # PlatformFL is accelerator-shaped. For the standard FlagGems ARM target,
         # preserve vLLM's stock CPU platform and install kernels in register_model().
-        arm_cpu_platform = _arm_cpu_platform()
+        try:
+            arm_cpu_platform = _arm_cpu_platform()
+        except Exception as _arm_exc:  # pragma: no cover - version dependent
+            logger.debug("[vllm_fl] ARM CPU platform probe unavailable: %s", _arm_exc)
+            arm_cpu_platform = None
         if arm_cpu_platform is not None:
             logger.info("[vllm_fl] ARM64 CPU target -> vLLM CPU platform")
             return arm_cpu_platform
 
-        _patch_custom_ops()
-        _patch_flash_attn_import()
-        _patch_transformers_compat()
+        _run_best_effort(
+            _patch_custom_ops,
+            _patch_flash_attn_import,
+            _patch_transformers_compat,
+        )
 
-        # Model-specific platform patches
-        from vllm_fl.patches.glm_moe_dsa import apply_platform_patches as glm5_platform
-        glm5_platform()
+        # Model-specific platform patches. The patch module only exists on
+        # plugin revisions that ship GLM-5/DSA support; a missing module means
+        # "nothing to patch", not "the platform is broken".
+        try:
+            from vllm_fl.patches.glm_moe_dsa import (
+                apply_platform_patches as glm5_platform,
+            )
+
+            glm5_platform()
+        except ImportError as _glm_exc:
+            logger.debug("[vllm_fl] GLM-5 platform patches unavailable: %s", _glm_exc)
+        except Exception as _glm_exc:  # pragma: no cover - vendor dependent
+            logger.warning("[vllm_fl] GLM-5 platform patches failed: %s", _glm_exc)
 
         # Note: FlagCX connector registration is deferred to register_model()
         # to avoid circular imports during VllmConfig.__post_init__ in spawned
@@ -206,9 +327,16 @@ def register():
         multiproc_method = os.environ.get("VLLM_WORKER_MULTIPROC_METHOD")
         if multiproc_method is None:
             os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-        _get_op_config()
+        _run_best_effort(_get_op_config)
 
-        return "vllm_fl.platform.PlatformFL"
+        _force_adopt_platform()
+        return _PLATFORM_QUALNAME
+    except Exception as _register_exc:  # pragma: no cover - defensive
+        logger.warning(
+            "[vllm_fl] register() failed, still reporting the platform: %s",
+            _register_exc,
+        )
+        return _PLATFORM_QUALNAME
     finally:
         _register_in_progress = False
 

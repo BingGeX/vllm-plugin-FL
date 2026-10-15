@@ -163,6 +163,48 @@ print(
     f"{current_platform.vendor_name!r}"
 )
 
+# vLLM resolves `current_platform` lazily and caches it exactly once, so a
+# resolution that happened *before* the plugin finished registering is never
+# retried. `_init_trace` records the stack of that first resolution: its tail
+# says who triggered it and whether the cache was already warm here.
+import vllm.platforms as _vllm_platforms
+
+_init_trace = getattr(_vllm_platforms, "_init_trace", "") or ""
+if _init_trace:
+    _frames = [ln for ln in _init_trace.splitlines() if ln.strip()][-12:]
+    print("[kunlunxin/setup] vllm.platforms._init_trace (tail):")
+    for _frame in _frames:
+        print(f"[kunlunxin/setup]   {_frame}")
+else:
+    print("[kunlunxin/setup] vllm.platforms._init_trace: <empty>")
+print(
+    "[kunlunxin/setup] cached vllm.platforms._current_platform = "
+    f"{type(getattr(_vllm_platforms, '_current_platform', None)).__name__}"
+)
+
+# A stale fallback cache is a cache problem, not a vendor problem: adopt
+# PlatformFL through vLLM's module `__setattr__` (the supported entry point for
+# a plugin) when PlatformFL is healthy. The assertions below are unchanged --
+# they still require device_type == 'cuda' and vendor_name == 'kunlunxin'; they
+# just stop failing on a resolution that happened too early.
+if type(current_platform).__name__ == "UnspecifiedPlatform" or not getattr(
+    current_platform, "device_type", ""
+):
+    try:
+        from vllm_fl.platform import PlatformFL as _AdoptedPlatformFL
+
+        _previous = type(current_platform).__name__
+        _vllm_platforms.current_platform = _AdoptedPlatformFL()
+        current_platform = _vllm_platforms.current_platform
+        print(
+            "[kunlunxin/setup] re-adopted PlatformFL as current_platform "
+            f"(was {_previous}, device_type="
+            f"{getattr(current_platform, 'device_type', '')!r}, vendor_name="
+            f"{getattr(current_platform, 'vendor_name', None)!r})"
+        )
+    except Exception as _adopt_exc:  # pragma: no cover - diagnostics only
+        print(f"::warning::[kunlunxin/setup] PlatformFL re-adopt failed: {_adopt_exc!r}")
+
 # The checkout must be the import source. A stale vllm-plugin-FL preinstalled in
 # the image silently shadowing it makes every later assertion misleading.
 assert _plugin_file == _root or _plugin_file.startswith(_root + os.sep), (
