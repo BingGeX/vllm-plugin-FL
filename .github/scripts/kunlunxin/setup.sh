@@ -12,6 +12,9 @@ fi
 : "${FLAGCX_PATH:?FLAGCX_PATH is not set}"
 : "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is not set}"
 
+# Align with #566 iluvatar: FlagGems vendor ops must be enabled in CI.
+export USE_FLAGGEMS="${USE_FLAGGEMS:-1}"
+
 git config --global --add safe.directory "$(pwd)"
 
 # The Kunlunxin image ships vllm-plugin-FL preinstalled from an older ref. Put
@@ -33,11 +36,14 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     LD_LIBRARY_PATH \
     GEMS_VENDOR \
     VLLM_PLUGINS \
+    USE_FLAGGEMS \
     FLAGCX_PATH \
     CUDA_VISIBLE_DEVICES \
     VLLM_ALLOW_LONG_MAX_MODEL_LEN \
     VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS; do
-    echo "${name}=${!name-}" >> "${GITHUB_ENV}"
+    if [[ -n "${!name:-}" ]]; then
+      echo "${name}=${!name}" >> "${GITHUB_ENV}"
+    fi
   done
 fi
 
@@ -89,14 +95,65 @@ print(f"[kunlunxin/setup] PYTHONPATH = {os.environ.get('PYTHONPATH')!r}")
 print(f"[kunlunxin/setup] vllm_fl.__file__ = {_plugin_file}")
 
 try:
-    from flag_gems.runtime.backend.device import DeviceDetector
+    import importlib as _importlib
 
-    _detector = DeviceDetector()
-    print(f"[kunlunxin/setup] DeviceDetector().name = {_detector.name!r}")
-    print(f"[kunlunxin/setup] DeviceDetector().vendor_name = {_detector.vendor_name!r}")
+    _detector = None
+    _detector_mod = None
+    # Same candidate order as vllm_fl/utils.py: the probe is optional, and the
+    # image's FlagGems build decides which module (if any) provides it.
+    for _mod in (
+        "flag_gems.runtime.backend.device",
+        "flag_gems.runtime.backend.device_finder",
+        "flag_gems.runtime.device_finder",
+        "flag_gems.runtime.device",
+    ):
+        try:
+            _detector = getattr(_importlib.import_module(_mod), "DeviceDetector")
+            _detector_mod = _mod
+            break
+        except (ImportError, FileNotFoundError, AttributeError):
+            continue
+    if _detector is None:
+        print("::warning::[kunlunxin/setup] no DeviceDetector module found")
+    else:
+        _instance = _detector()
+        print(f"[kunlunxin/setup] DeviceDetector from {_detector_mod}")
+        print(
+            f"[kunlunxin/setup] DeviceDetector().name = "
+            f"{getattr(_instance, 'name', '')!r}"
+        )
+        print(
+            f"[kunlunxin/setup] DeviceDetector().vendor_name = "
+            f"{getattr(_instance, 'vendor_name', '')!r}"
+        )
 except Exception as exc:  # pragma: no cover - diagnostics only
     print(f"::warning::[kunlunxin/setup] DeviceDetector probe failed: {exc!r}")
 
+# Resolve the plugin class explicitly. Even when vLLM picked the wrong
+# platform, these attributes show whether PlatformFL itself was built with a
+# usable vendor/device_type — that is the difference between "the plugin never
+# became current" and "the plugin was never importable".
+try:
+    from vllm_fl.platform import PlatformFL as _PlatformFL
+
+    print(
+        f"[kunlunxin/setup] PlatformFL.vendor_name = {_PlatformFL.vendor_name!r}"
+    )
+    print(
+        f"[kunlunxin/setup] PlatformFL.device_type = {_PlatformFL.device_type!r}"
+    )
+except Exception as exc:  # pragma: no cover - diagnostics only
+    print(f"::warning::[kunlunxin/setup] PlatformFL import failed: {exc!r}")
+
+# The platform vLLM actually selected. UnspecifiedPlatform has device_type "" —
+# a bare empty string in the assert below is otherwise indistinguishable from a
+# probe that returned empty, so name the type explicitly.
+print(
+    f"[kunlunxin/setup] type(current_platform) = {type(current_platform).__name__}"
+)
+print(f"[kunlunxin/setup] repr(current_platform) = {current_platform!r}")
+print(f"[kunlunxin/setup] GEMS_VENDOR = {os.environ.get('GEMS_VENDOR')!r}")
+print(f"[kunlunxin/setup] VLLM_PLUGINS = {os.environ.get('VLLM_PLUGINS')!r}")
 print(
     f"[kunlunxin/setup] current_platform.device_type = "
     f"{current_platform.device_type!r}"
@@ -117,8 +174,17 @@ assert _plugin_file == _root or _plugin_file.startswith(_root + os.sep), (
 assert _vlm_ver.startswith("0.28") and "empty" in _vlm_ver, f"[kunlunxin/setup] vllm version mismatch: {_vlm_ver!r} (expect 0.28.*+empty)"
 assert torch.cuda.is_available(), "Kunlunxin accelerator is unavailable"
 assert torch.cuda.device_count() >= 4, torch.cuda.device_count()
-assert current_platform.device_type == "cuda", current_platform.device_type
-assert current_platform.vendor_name == "kunlunxin", current_platform.vendor_name
+assert current_platform.device_type == "cuda", (
+    "[kunlunxin/setup] current_platform is "
+    f"{type(current_platform).__name__} reporting device_type="
+    f"{current_platform.device_type!r} (expected 'cuda'). Check the PlatformFL "
+    "diagnostics above: GEMS_VENDOR must be set and PlatformFL must import."
+)
+assert current_platform.vendor_name == "kunlunxin", (
+    "[kunlunxin/setup] current_platform is "
+    f"{type(current_platform).__name__} reporting vendor_name="
+    f"{current_platform.vendor_name!r} (expected 'kunlunxin')."
+)
 print(f"vLLM import ok: {_vlm_ver}")
 print(f"vLLM-FL import ok: {vllm_fl.__file__}")
 print(f"FlagGems import ok: {getattr(flag_gems, '__version__', 'unknown')}")
