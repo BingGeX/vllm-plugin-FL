@@ -16,7 +16,9 @@ git config --global --add safe.directory "$(pwd)"
 
 # The Kunlunxin image ships vllm-plugin-FL preinstalled from an older ref. Put
 # the checkout first on sys.path so a stale image copy can never win the import.
-export PYTHONPATH="$(pwd)${PYTHONPATH:+:${PYTHONPATH}}"
+# Use $PWD rather than $(pwd) so this stays clear of ShellCheck SC2155
+# (declaration must not mask a command substitution's return value).
+export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 
 if [[ -d "${FLAGCX_PATH}/build/lib" ]]; then
   export LD_LIBRARY_PATH="${FLAGCX_PATH}/build/lib:/opt/kunlun/lib:${LD_LIBRARY_PATH:-}"
