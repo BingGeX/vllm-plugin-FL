@@ -98,6 +98,14 @@ p800:
       include: "*"
       exclude:
         - dispatch/test_flaggems_quantization.py
+        # THead-only KV-cache kernels: the cases assert THead PPU numerics and
+        # only gate on torch.cuda.is_available(), which is True on P800 through
+        # the CUDA-compatible accelerator shim, so they must not run here.
+        - dispatch/test_thead_cache.py
+        # FlagGems-vLLM interface parity compares against NVIDIA FlagGems
+        # baselines; its provider fixture takes the backend from the device
+        # under test, and P800 results are not comparable to those baselines.
+        - dispatch/test_flaggems_vllm_interface_parity.py
     benchmark:
       enabled: true
       smoke: ["serve"]
