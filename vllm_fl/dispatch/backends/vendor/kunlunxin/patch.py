@@ -60,6 +60,15 @@ def _apply_legacy_kunlunxin_patches():
 
     apply_accelerator_compat()
 
+    # Triton's XPUOptions omits launch_cooperative_grid, which the NVSHMEM
+    # post-compile hook formats unconditionally. Bind it so vLLM's KV-block
+    # zeroing kernel can compile on P800.
+    from vllm_fl.dispatch.backends.vendor.kunlunxin.patches.triton_compat import (
+        apply_triton_compat,
+    )
+
+    apply_triton_compat()
+
     # Disable Triton kernels incompatible with Kunlunxin XPU
     os.environ.setdefault("VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE", "0")
 
