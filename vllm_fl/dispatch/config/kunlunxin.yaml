@@ -88,6 +88,15 @@ flagos_blacklist:
   - argmax
   - bmm
   - index_put_
+  # `aten::pow.Scalar` (kernel fn `pow_scalar`) with a float scalar base
+  # (`2.0 ** tensor`, e.g. RotaryEmbedding._compute_inv_freq) crashes the
+  # Kunlunxin Triton backend: `tl.exp2(y * lnb)` trips
+  # "triton_xpu.unpack reached lowering without a bufPtr" in ConvertTritonXPUToLLVM.
+  # FlagGems matches flagos_blacklist against the KERNEL FUNCTION name
+  # (flag_gems/runtime/op_registrar.py: `item[1].__name__ not in self.exclude_ops`),
+  # so the entry MUST be `pow_scalar`; plain `pow` has no effect.
+  # Tensor-base forms (pow_tensor_scalar / pow_tensor_tensor) stay on FlagGems.
+  - pow_scalar
   - normal_
   - copy_
   - gelu

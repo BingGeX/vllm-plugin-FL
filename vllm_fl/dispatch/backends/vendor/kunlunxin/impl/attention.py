@@ -67,6 +67,23 @@ def is_kunlunxin_ops_available() -> bool:
     return _KUNLUNXIN_OPS_AVAILABLE
 
 
+def _is_full_graph_runtime() -> bool:
+    try:
+        from vllm.config import CUDAGraphMode
+        from vllm.forward_context import (
+            get_forward_context,
+            is_forward_context_available,
+        )
+
+        return (
+            is_forward_context_available()
+            and get_forward_context().cudagraph_runtime_mode
+            == CUDAGraphMode.FULL
+        )
+    except Exception:
+        return False
+
+
 @dataclass
 class KunlunxinMetadata:
     """Metadata for Kunlunxin attention."""

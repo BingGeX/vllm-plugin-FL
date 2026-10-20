@@ -52,6 +52,14 @@ def _apply_kunlunxin_patches():
 
 
 def _apply_legacy_kunlunxin_patches():
+    # Bind torch.accelerator memory APIs that this torch build lacks; vLLM 0.28
+    # calls e.g. torch.accelerator.get_memory_info during worker init_device.
+    from vllm_fl.dispatch.backends.vendor.kunlunxin.patches.accelerator_compat import (
+        apply_accelerator_compat,
+    )
+
+    apply_accelerator_compat()
+
     # Disable Triton kernels incompatible with Kunlunxin XPU
     os.environ.setdefault("VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE", "0")
 

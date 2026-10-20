@@ -290,7 +290,7 @@ from vllm.v1.worker.utils import (
 
 # FL-specific imports
 from vllm_fl.compilation.graph import GraphWrapper
-from vllm_fl.dispatch import prewarm_cached_ops
+from vllm_fl.dispatch import warmup_cached_ops
 from vllm_fl.dispatch.io_common import managed_inference_mode
 from vllm_fl.dispatch.io_dumper import (
     advance_io_step,
@@ -5424,7 +5424,7 @@ class ModelRunnerFL(
 
         # All model modules are loaded now, while compilation and CUDA Graph
         # capture have not started yet. Resolve CachedOps outside either graph.
-        prewarm_cached_ops()
+        warmup_cached_ops()
 
         if not load_dummy_weights:
             # FL: register IO dumper module hooks

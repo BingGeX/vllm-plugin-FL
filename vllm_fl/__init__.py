@@ -329,6 +329,16 @@ def register():
             os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
         _run_best_effort(_get_op_config)
 
+        from vllm_fl.utils import DeviceInfo
+
+        vendor_name = DeviceInfo().vendor_name
+        if vendor_name == "ascend":
+            # v0.28 defaults some models to the upstream CUDA/UVA runner.
+            os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "0")
+        if vendor_name == "nvidia":
+            _force_adopt_platform()
+            return "vllm_fl.nvidia_platform.NvidiaPlatformFL"
+
         _force_adopt_platform()
         return _PLATFORM_QUALNAME
     except Exception as _register_exc:  # pragma: no cover - defensive
@@ -384,10 +394,6 @@ def register_model():
     """Register FL-specific models not yet upstream."""
     # General plugins are loaded independently in spawned model-inspection and
     # worker processes, so all runtime compatibility hooks must be idempotent.
-    from vllm_fl.patches.qwen3_5_text import apply_qwen3_5_text_patches
-
-    apply_qwen3_5_text_patches()
-
     from vllm.platforms import current_platform
     if current_platform.device_type == "cpu" and _arm_cpu_platform() is not None:
         from vllm_fl.patches.arm_cpu_gdn import (
