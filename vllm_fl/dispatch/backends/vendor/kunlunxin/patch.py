@@ -494,8 +494,19 @@ def patch_graph_all_reduce(replacements=None):
         @wraps(original_all_reduce)
         def graph_safe_all_reduce(self, input_):
             capture = BreakableCUDAGraphCapture.current()
-            use_graph_collective = torch.cuda.is_current_stream_capturing() and (
-                _is_full_graph_runtime() or capture is not None
+            # Segment injection is valid ONLY for the FULL decode runtime, whose
+            # graph is built by this module and is replayed by us. PIECEWISE
+            # derives its segment boundaries from the torch.compile
+            # splitting-ops contract: ending and re-beginning a segment in the
+            # middle of a piecewise piece splits a captured piece into two
+            # graphs that the piecewise replay bookkeeping does not know about,
+            # so replay dereferences buffers captured for the original
+            # boundaries (observed as a simultaneous cudaErrorIllegalAddress on
+            # all 4 ranks at the first real prefill). Keep PIECEWISE on the
+            # unmodified path, exactly as it behaved before this patch existed.
+            use_graph_collective = (
+                torch.cuda.is_current_stream_capturing()
+                and _is_full_graph_runtime()
             )
             if not use_graph_collective:
                 return original_all_reduce(self, input_)
