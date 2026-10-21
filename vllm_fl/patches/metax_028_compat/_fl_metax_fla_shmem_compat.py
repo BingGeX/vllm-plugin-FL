@@ -36,7 +36,7 @@ _KERNEL = "chunk_gated_delta_rule_fwd_kernel_h_blockdim64"
 _TARGET = "vllm.third_party.flash_linear_attention.ops.chunk_delta_h"
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PATCH_FILE = os.path.join(
-    os.path.dirname(_HERE),
+    os.path.dirname(os.path.dirname(_HERE)),
     "dispatch", "backends", "vendor", "metax", "patches", "chunk_delta_h.py",
 )
 _STATE = {"skipped": 0, "matched": 0, "patched": 0, "detail": "init"}
@@ -48,15 +48,9 @@ def _enabled():
 
 
 def _applies():
-    plugins = os.environ.get("VLLM_PLUGINS")
-    if plugins:
-        names = {p.strip() for p in plugins.split(",") if p.strip()}
-        if "metax" not in names:
-            return False
-    try:
-        return importlib.util.find_spec("vllm_metax") is not None
-    except Exception:
-        return False
+    from ._fl_metax_gate import metax_active
+
+    return metax_active()
 
 
 def _publish_attr_chain(module):

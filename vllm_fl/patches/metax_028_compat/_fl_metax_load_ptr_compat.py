@@ -15,7 +15,6 @@ Probe evidence on triton 3.0.0 (probe V1/V2/V3):
 Kill switch: FL_METAX_LOAD_PTR_PATCH=0.
 """
 import importlib.machinery
-import importlib.util
 import os
 import sys
 
@@ -34,13 +33,9 @@ def _enabled():
 
 
 def _metax_active():
-    vp = os.environ.get("VLLM_PLUGINS")
-    if vp is not None and vp.strip() and "metax" not in vp:
-        return False
-    try:
-        return importlib.util.find_spec("vllm_metax") is not None
-    except Exception:
-        return False
+    from ._fl_metax_gate import metax_active
+
+    return metax_active()
 
 
 def _make_impl():
@@ -164,14 +159,12 @@ def status():
 install()
 
 
-# === FL r12d module-level tl for jit globals ===
+# === module-level tl for jit globals ===
 # triton 3.0 resolves annotation names from the jit function's __globals__;
-# _make_impl imported tl as a LOCAL, so the subprocess rebuild of _load_ptr
-# raised NameError('tl is not defined'). Expose it at module level.
+# _make_impl imports tl as a LOCAL, so a subprocess rebuild of _load_ptr raises
+# NameError('tl is not defined'). Keep the module-level binding.
 try:
     import triton as _fl_triton  # noqa: F401
     import triton.language as tl  # noqa: F401
-except Exception as _e:
-    print("R12D_TL_IMPORT_FAIL %r" % (_e,))
-else:
-    print("R12D_TL_GLOBAL_OK")
+except Exception:
+    pass

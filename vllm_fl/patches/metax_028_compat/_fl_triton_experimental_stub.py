@@ -1,4 +1,4 @@
-"""FlagScale-Agent MetaX boot shim: register triton.experimental stubs early.
+"""FlagScale-Agent MetaX compatibility shim: register triton.experimental stubs.
 
 The MetaX Triton 3.0.0 runtime ships no triton.experimental / gluon subpackage,
 and its triton.language.core has no `_aggregate`, while vllm 0.28 imports both
@@ -10,8 +10,8 @@ without touching upstream vllm.
 Only the IMPORT path is covered: on MACA the consumers of `aggregate` are the
 AMD/ROCm gluon kernels (vllm/models/inkling/amd/ops/gluon/*), which never run here.
 
-Loaded from a site-packages .pth at interpreter startup.
-Stdlib only: must not import vllm, torch or triton.
+Installed from the FL plugin entry point (vllm_fl.register), which runs before
+vllm's triton_utils imports these names.
 """
 import os
 import sys

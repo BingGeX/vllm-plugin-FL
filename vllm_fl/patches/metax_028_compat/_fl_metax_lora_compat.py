@@ -67,13 +67,9 @@ def _patch_enabled():
 
 
 def _metax_active():
-    vp = os.environ.get("VLLM_PLUGINS")
-    if vp is not None and vp.strip() and "metax" not in vp:
-        return False
-    try:
-        return importlib.util.find_spec("vllm_metax") is not None
-    except Exception:
-        return False
+    from ._fl_metax_gate import metax_active
+
+    return metax_active()
 
 
 def _applies():

@@ -191,8 +191,32 @@ def _init_vendor_device():
         _patch_xpu_get_device()
 
 
+def _install_metax_compat():
+    """Apply the MetaX vLLM 0.28 compatibility shims before any kernel runs.
+
+    These shims used to be installed as ``.pth`` hooks in ``site-packages`` so
+    that they ran at interpreter start-up. Every one of them either arms a
+    ``sys.meta_path`` hook for a lazily imported module or rebinds a module
+    that is already imported, so the plugin entry point runs early enough and
+    a plain ``pip install`` is sufficient.
+
+    This runs before the platform-slot decision below: under
+    ``VLLM_PLUGINS=metax`` FL yields the platform slot and
+    ``PlatformFL.import_kernels`` is never called, yet the vendor modules
+    still need these fixes.
+    """
+    try:
+        from vllm_fl.patches.metax_028_compat import install, metax_active
+
+        if metax_active():
+            install()
+    except Exception as exc:  # pragma: no cover - never block registration
+        logger.warning("[vllm_fl] MetaX compatibility shims not installed: %s", exc)
+
+
 def register():
     """Register the FL platform."""
+    _install_metax_compat()
     # MetaX (maca) ships its own vLLM platform plugin (vllm_metax) and vLLM
     # 0.28 rejects more than one platform plugin
     # (RuntimeError: Only one platform plugin can be activated, but got

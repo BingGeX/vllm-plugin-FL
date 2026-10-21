@@ -15,8 +15,8 @@ still initialising):
   track 2  ``vllm.v1.attention.backend`` is wrapped too.
 
 Only injects when the symbol is genuinely absent.  Never touches vllm or
-vllm_metax on disk.  Loaded from a site-packages .pth at interpreter start, so
-it must not import vllm / vllm_metax / vllm_fl itself.
+vllm_metax on disk.  Installed from the FL plugin entry point
+(vllm_fl.register); the hooks only patch modules that vllm imports lazily.
 
 Kill switch: FL_METAX_SPARSE_MLA_COMPAT=0
 """
@@ -38,15 +38,9 @@ def _enabled():
 
 
 def _applies():
-    plugins = os.environ.get("VLLM_PLUGINS")
-    if plugins:
-        names = {p.strip() for p in plugins.split(",") if p.strip()}
-        if "metax" not in names:
-            return False
-    try:
-        return importlib.util.find_spec("vllm_metax") is not None
-    except Exception:
-        return False
+    from ._fl_metax_gate import metax_active
+
+    return metax_active()
 
 
 def _make_class(mod):

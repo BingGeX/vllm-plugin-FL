@@ -23,6 +23,28 @@ fi
 # Only install the checked-out plugin source for this workflow run.
 python -m pip install --no-build-isolation --no-deps -e .
 
+# Drop boot hooks written by the retired site-packages installer. Older
+# v0.28.0-metax-ci images baked one `zz_fl_*.pth` per shim into site-packages;
+# uninstalling that wheel removed the modules but left the hooks behind, so
+# every interpreter start printed ModuleNotFoundError. Compatibility is now
+# installed from the plugin entry point (vllm_fl.register) and needs no hook.
+python - <<'PY'
+import pathlib
+import sysconfig
+
+site_packages = pathlib.Path(sysconfig.get_paths()["purelib"])
+removed = []
+for pth in site_packages.glob("zz_fl_*.pth"):
+    try:
+        body = pth.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    if "_fl_" in body and "sys.path.insert" in body:
+        pth.unlink()
+        removed.append(pth.name)
+print(f"[metax-ci] removed {len(removed)} legacy boot hook(s): {removed}")
+PY
+
 # Patch FlagGems LibTuner to fall back to best_config on cache KeyError.
 # TODO: remove when FlagGems fixes kernel hash stability in LibTuner.
 python - <<'PATCH'

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+﻿# SPDX-License-Identifier: Apache-2.0
 """FlagScale-Agent MetaX boot shim: absorb supports_combination arg drift.
 
 vllm 0.28 added the ``use_mm_prefix`` parameter to
@@ -16,7 +16,6 @@ Nothing on disk is modified.
 Kill switch: FL_METAX_SUPPORTS_COMBINATION_COMPAT=0
 """
 
-import importlib.util
 import inspect
 import os
 import sys
@@ -31,15 +30,9 @@ def _enabled():
 
 
 def _applies():
-    plugins = os.environ.get("VLLM_PLUGINS")
-    if plugins:
-        names = {p.strip() for p in plugins.split(",") if p.strip()}
-        if "metax" not in names:
-            return False
-    try:
-        return importlib.util.find_spec("vllm_metax") is not None
-    except Exception:
-        return False
+    from ._fl_metax_gate import metax_active
+
+    return metax_active()
 
 
 def _param_names(func):

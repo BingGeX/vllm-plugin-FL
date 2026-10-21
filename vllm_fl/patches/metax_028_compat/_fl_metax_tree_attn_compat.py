@@ -1,4 +1,4 @@
-"""FlagScale-Agent MetaX boot shim: restore AttentionBackendEnum.TREE_ATTN.
+"""FlagScale-Agent MetaX compatibility shim: restore AttentionBackendEnum.TREE_ATTN.
 
 vllm_metax 0.20.0 (site-packages) assumes the vllm 0.20 attention backend enum,
 which has TREE_ATTN. vllm 0.28 dropped that member, so
@@ -7,11 +7,9 @@ building the engine config. This shim re-adds the missing member in-process
 before vllm_metax touches it; gated on the metax backend. It never modifies
 vllm or vllm_metax on disk.
 
-Loaded from a site-packages .pth at interpreter start (same mechanism as
-_fl_triton_experimental_stub), so it must not import vllm_fl or vllm.
+Installed from the FL plugin entry point (vllm_fl.register), before the
+platform slot is claimed or yielded.
 """
-import importlib.util
-import os
 import sys
 
 _TARGET = "vllm.v1.attention.backends.registry"
@@ -23,15 +21,9 @@ _STATE = {"patched": False, "detail": "not installed"}
 
 
 def _applies():
-    plugins = os.environ.get("VLLM_PLUGINS")
-    if plugins:
-        names = {p.strip() for p in plugins.split(",") if p.strip()}
-        if "metax" not in names:
-            return False
-    try:
-        return importlib.util.find_spec("vllm_metax") is not None
-    except Exception:
-        return False
+    from ._fl_metax_gate import metax_active
+
+    return metax_active()
 
 
 def _add_member(enum_cls, name, value):

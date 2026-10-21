@@ -221,6 +221,49 @@ class PlatformFL(Platform):
         import vllm.kernels  # noqa: F401
 
     @classmethod
+    def apply_config_platform_defaults(cls, vllm_config: "VllmConfig") -> None:
+        """Install MetaX graph defaults before vLLM finalizes graph settings.
+
+        vLLM calls this right after CLI parsing, before the cudagraph capture
+        sizes / max graph size are derived from the graph mode. Setting the
+        defaults here keeps a bare serve (no ``--compilation-config``)
+        capturing graphs without fighting the final configuration checks.
+
+        Explicit user configuration wins: ``--enforce-eager`` /
+        ``-O0`` (``mode == NONE``) and an explicit ``cudagraph_mode`` are left
+        untouched. Rewriting a finalized ``NONE`` to ``PIECEWISE`` afterwards
+        would also trip vLLM's "piecewise requires VLLM_COMPILE" assertion.
+        """
+        if cls.vendor_name != "metax":
+            return
+        compilation_config = getattr(vllm_config, "compilation_config", None)
+        if compilation_config is None:
+            return
+
+        from vllm.config import CUDAGraphMode
+        from vllm.config.compilation import CompilationMode
+
+        if compilation_config.mode == CompilationMode.NONE:
+            # Explicit eager / no-graph run.
+            return
+        if compilation_config.cudagraph_mode is not None:
+            # Explicit -cc.cudagraph_mode=... ; do not override.
+            return
+
+        # PIECEWISE only: use_inductor_graph_partition is rejected by
+        # torch 2.8.0+metax, so graph partitioning stays off.
+        compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
+        if not getattr(compilation_config, "cudagraph_capture_sizes", None):
+            compilation_config.cudagraph_capture_sizes = [
+                1, 2, 4, 8, 16, 32, 64, 128, 256
+            ]
+        if hasattr(compilation_config, "cudagraph_mm_encoder"):
+            compilation_config.cudagraph_mm_encoder = False
+        pass_config = getattr(compilation_config, "pass_config", None)
+        if pass_config is not None:
+            pass_config.fuse_rope_kvcache_cat_mla = False
+
+    @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
         if cls.device_type == "npu" and vllm_config.use_v2_model_runner:
             raise ValueError(
@@ -380,26 +423,9 @@ class PlatformFL(Platform):
                 attention_config.use_trtllm_attention = False
                 attention_config.disable_flashinfer_prefill = True
 
-            # B-tier metax graph defaults: a bare serve (no --compilation-config)
-            # must still capture CUDA graphs. Otherwise cudagraph_mode stays
-            # None and vllm resolves it to NONE => zero graphs captured.
-            _fl_cc = getattr(vllm_config, "compilation_config", None)
-            if _fl_cc is not None:
-                if (
-                    _fl_cc.cudagraph_mode is None
-                    or _fl_cc.cudagraph_mode == CUDAGraphMode.NONE
-                ):
-                    _fl_cc.cudagraph_mode = CUDAGraphMode.PIECEWISE
-                if not getattr(_fl_cc, "cudagraph_capture_sizes", None):
-                    _fl_cc.cudagraph_capture_sizes = [
-                        1, 2, 4, 8, 16, 32, 64, 128, 256
-                    ]
-                if hasattr(_fl_cc, "cudagraph_mm_encoder"):
-                    _fl_cc.cudagraph_mm_encoder = False
-                _fl_pc = getattr(_fl_cc, "pass_config", None)
-                if _fl_pc is not None:
-                    _fl_pc.fuse_rope_kvcache_cat_mla = False
-                # use_inductor_graph_partition stays None/False (torch 2.8.0).
+            # Graph defaults (PIECEWISE, capture sizes, no mm-encoder graph)
+            # are installed in apply_config_platform_defaults so that explicit
+            # --enforce-eager / cudagraph_mode=NONE keep winning.
 
         # GCU relies on ECCL for collectives; custom all-reduce kernels are
         # not available.
