@@ -355,6 +355,10 @@ def patch_breakable_private_pools(replacements=None):
         def init_with_private_pools(self, *args, **kwargs):
             original_init(self, *args, **kwargs)
             self.graph_pool = None
+            # One graph memory pool per batch descriptor, shared by every
+            # breakable segment of that descriptor. Filled lazily by
+            # `call_full_only`.
+            self._kunlunxin_descriptor_pools = {}
 
         init_with_private_pools._kunlunxin_private_pools = True
         _install_graph_patch(
@@ -428,18 +432,41 @@ def patch_breakable_full_only(replacements=None):
             ):
                 return self.runnable(*args, **kwargs)
 
+            runtime_mode = forward_context.cudagraph_runtime_mode
+            descriptor = forward_context.batch_descriptor
             if (
-                forward_context.cudagraph_runtime_mode == CUDAGraphMode.PIECEWISE
-                and forward_context.batch_descriptor not in self.entries
+                runtime_mode in (CUDAGraphMode.FULL, CUDAGraphMode.PIECEWISE)
+                and descriptor not in self.entries
             ):
                 from vllm.platforms import current_platform
 
                 # Reuse allocations between the ordered eager-break segments
                 # of this ONE descriptor. Sharing across different shapes is
                 # still prohibited. A separate pool per segment otherwise
-                # pays allocator minimum blocks once per layer and descriptor.
+                # pays allocator minimum blocks once per layer and descriptor,
+                # and leaves every captured tensor of segment k living in a
+                # pool that segment k+1 never allocated from.
+                #
+                # FULL needs the same treatment: `patch_breakable_private_pools`
+                # leaves `graph_pool` unset, so upstream `_begin_segment()`
+                # takes the `pool is None` branch and opens a fresh private
+                # mempool at every segment boundary carved out by
+                # `graph_safe_all_reduce`. One FULL decode graph then spans
+                # ~8 unrelated pools, while upstream's contract is single-pool
+                # ("Output tensors live at the same addresses as during
+                # capture"). Keep one pool per descriptor so a FULL decode
+                # graph never straddles pools. Pool identity has no effect on
+                # the per-graph XCCL allocation limit that motivates the
+                # segmentation in `patch_graph_all_reduce`.
+                pools = getattr(self, "_kunlunxin_descriptor_pools", None)
+                if pools is None:
+                    pools = self._kunlunxin_descriptor_pools = {}
+                pool = pools.get(descriptor)
+                if pool is None:
+                    pool = current_platform.graph_pool_handle()
+                    pools[descriptor] = pool
                 original_pool = self.graph_pool
-                self.graph_pool = current_platform.graph_pool_handle()
+                self.graph_pool = pool
                 try:
                     return original_call(self, *args, **kwargs)
                 finally:
