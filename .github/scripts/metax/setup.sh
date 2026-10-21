@@ -45,6 +45,29 @@ for pth in site_packages.glob("zz_fl_*.pth"):
 print(f"[metax-ci] removed {len(removed)} legacy boot hook(s): {removed}")
 PY
 
+# Reporting plugins are baked into docker/metax/Dockerfile, but the published
+# v0.28.0-metax-ci tag predates them. tests/run.py always passes --cov and
+# --json-report, so install anything the image is missing instead of failing
+# with "unrecognized arguments".
+python - <<'PY'
+import importlib.util
+import subprocess
+import sys
+
+missing = [
+    package
+    for module, package in (
+        ("pytest_cov", "pytest-cov"),
+        ("pytest_jsonreport", "pytest-json-report"),
+        ("pytest_timeout", "pytest-timeout"),
+    )
+    if importlib.util.find_spec(module) is None
+]
+if missing:
+    print(f"[metax-ci] installing missing test plugins: {missing}")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+PY
+
 # Patch FlagGems LibTuner to fall back to best_config on cache KeyError.
 # TODO: remove when FlagGems fixes kernel hash stability in LibTuner.
 python - <<'PATCH'
