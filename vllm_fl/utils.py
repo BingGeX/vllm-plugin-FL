@@ -1,45 +1,9 @@
 # Copyright (c) 2025 BAAI. All rights reserved.
 
-import importlib
 import json
-import logging
 import os
 
-import flag_gems
-from flag_gems.runtime import backend
-
-logger = logging.getLogger(__name__)
-
-# FlagGems has moved DeviceDetector between releases: <=5.0.2 keeps it in
-# ``flag_gems.runtime.backend.device``, later releases moved it to
-# ``flag_gems.runtime.backend.device_finder``. Some images ship builds where
-# neither path exists, so the runtime probe is optional: when it cannot be
-# imported the vendor must come from GEMS_VENDOR instead of aborting the
-# import of this module (that would take the whole platform plugin down and
-# make vLLM silently fall back to UnspecifiedPlatform).
-_DEVICE_DETECTOR_MODULES = (
-    "flag_gems.runtime.backend.device",
-    "flag_gems.runtime.backend.device_finder",
-    "flag_gems.runtime.device_finder",
-    "flag_gems.runtime.device",
-)
-
-
-def _load_device_detector():
-    """Return FlagGems' DeviceDetector class, or None when unavailable."""
-    for module_name in _DEVICE_DETECTOR_MODULES:
-        try:
-            module = importlib.import_module(module_name)
-        except (ImportError, FileNotFoundError, AttributeError):
-            continue
-        detector = getattr(module, "DeviceDetector", None)
-        if detector is not None:
-            return detector
-    return None
-
-
-# ``None`` means "this runtime exposes no device-finder probe".
-DeviceDetector = _load_device_detector()
+_OP_CONFIG: dict[str, str] | None = None
 
 
 def _env_vendor_name() -> str:
@@ -52,7 +16,6 @@ def _env_vendor_name() -> str:
     """
     return os.environ.get("GEMS_VENDOR", "").strip().lower()
 
-_OP_CONFIG: dict[str, str] | None = None
 
 # Mapping used by dispatch registration to resolve the current runtime platform
 # into a backend directory under dispatch/backends/vendor.
@@ -314,7 +277,10 @@ _load_op_config_from_env()
 
 class DeviceInfo:
     def __init__(self):
-        self.device = self._probe_device()
+        from flag_gems.runtime import backend, device
+
+        self._backend = backend
+        self.device = device
         self.supported_device = [
             "nvidia",
             "ascend",
@@ -326,85 +292,29 @@ class DeviceInfo:
             "enflame",
             "kunlunxin",
         ]
-        try:
-            backend.set_torch_backend_device_fn(self.vendor_name)
-        except Exception as exc:  # pragma: no cover - runtime dependent
-            logger.warning(
-                "[vllm_fl] FlagGems backend probe failed for vendor %r: %s",
-                self.vendor_name,
-                exc,
-            )
-
-    @staticmethod
-    def _probe_device():
-        """Instantiate FlagGems' device detector, or None when unavailable.
-
-        A missing/broken runtime probe must not prevent ``vllm_fl.utils`` from
-        importing: this module is imported by ``vllm_fl.platform`` at class-body
-        time, so an exception here aborts the platform plugin and vLLM
-        silently degrades to ``UnspecifiedPlatform``.
-        """
-        if DeviceDetector is None:
-            logger.warning(
-                "[vllm_fl] FlagGems exposes no DeviceDetector; falling back to "
-                "GEMS_VENDOR (%r) for vendor resolution.",
-                _env_vendor_name(),
-            )
-            return None
-        try:
-            return DeviceDetector()
-        except Exception as exc:  # pragma: no cover - runtime dependent
-            logger.warning("[vllm_fl] FlagGems DeviceDetector() failed: %s", exc)
-            return None
-
-    def _detected(self, attribute: str) -> str:
-        """Read a non-empty attribute off the optional runtime probe."""
-        if self.device is None:
-            return ""
-        value = getattr(self.device, attribute, "") or ""
-        return value.strip() if isinstance(value, str) else ""
+        self._backend.set_torch_backend_device_fn(self.device.vendor_name)
 
     @property
     def dispatch_key(self):
-        # Preserve the probe's own value (including "" when it reports nothing);
-        # only guarantee no AttributeError when the probe is unavailable.
-        return self._detected("dispatch_key")
+        return self.device.dispatch_key
 
     @property
     def vendor_name(self):
-        # The runtime probe is authoritative when it reports something. Where
-        # it does (CI containers whose FlagGems build cannot see the
-        # accelerator), GEMS_VENDOR -- the override FlagGems itself honours --
-        # decides, so the plugin still binds the correct vendor backend
-        # instead of collapsing to UnspecifiedPlatform.
-        return self._detected("vendor_name") or _env_vendor_name()
+        return self.device.vendor_name
 
     @property
     def device_type(self):
-        # FlagGems DeviceDetector().name may be empty on some runtimes (for
-        # example CI containers where vendor detection is not wired up).
-        # Fall back to the static VENDOR_DEVICE_MAP entry so that the
-        # reported device_type stays meaningful.
-        detected = self._detected("name")
-        if detected:
-            return detected
-        vendor = self.vendor_name
-        if not vendor:
-            return ""
-        try:
-            return get_device_type(vendor)
-        except ValueError:
-            return ""
+        return self.device.name
 
     @property
     def torch_device_fn(self):
         # torch_device_fn is like 'torch.cuda' object
-        return backend.gen_torch_device_object()
+        return self._backend.gen_torch_device_object()
 
     @property
     def torch_backend_device(self):
         # torch_backend_device is like 'torch.backend.cuda' object
-        return backend.get_torch_backend_device_fn()
+        return self._backend.get_torch_backend_device_fn()
 
     def get_supported_device(self):
         if self.vendor_name not in self.supported_device:
@@ -416,6 +326,8 @@ def get_flaggems_all_ops() -> list[str]:
     """
     Get all FlagGems operator names from flag_gems._FULL_CONFIG.
     """
+    import flag_gems
+
     try:
         # _FULL_CONFIG is a tuple of (op_name, function, ...) tuples
         # Some entries have 2 elements, some have 3
