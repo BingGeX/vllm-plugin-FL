@@ -5,6 +5,15 @@ set -euo pipefail
 
 export PATH="/opt/conda/bin:${PATH}"
 
+# GitHub Actions runs the job container with HOME=/github/home, so FlagGems
+# would tune every Triton kernel from scratch inside each pytest process. The
+# tuned-config keys are not stable across processes (see the LibTuner patch
+# below), so the selected tiling depends on benchmark noise; a bad draw makes
+# the MoE decode numerically wrong on MACA and 35B-A3B answers garbage.
+# Reuse the tuned configs baked into the image so kernel selection is
+# deterministic (and skip the ~5 min of runtime autotuning).
+export FLAGGEMS_CACHE_DIR="${FLAGGEMS_CACHE_DIR:-/root/.flaggems}"
+
 : "${GEMS_VENDOR:?GEMS_VENDOR is not set}"
 : "${VLLM_PLUGINS:?VLLM_PLUGINS is not set}"
 
@@ -14,7 +23,8 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
   for name in \
     PATH \
     GEMS_VENDOR \
-    VLLM_PLUGINS; do
+    VLLM_PLUGINS \
+    FLAGGEMS_CACHE_DIR; do
     echo "${name}=${!name}" >> "${GITHUB_ENV}"
   done
 fi
