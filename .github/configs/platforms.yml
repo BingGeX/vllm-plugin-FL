@@ -25,7 +25,7 @@ platforms:
   ascend:
     enabled: true
   hygon:
-    enabled: false
+    enabled: true
   metax:
     enabled: true
   musa:
@@ -36,4 +36,6 @@ platforms:
     enabled: false
   # Image published; needs a self-hosted runner with labels in configs/iluvatar.yml.
   iluvatar:
+    enabled: true
+  thead:
     enabled: true

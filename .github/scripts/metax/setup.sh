@@ -170,6 +170,8 @@ else:
         )
 PATCH
 
+python .github/scripts/install_flaggems_vllm.py
+
 python - <<'PY'
 import flag_gems
 import torch

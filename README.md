@@ -41,17 +41,21 @@ In theory, vllm-plugin-FL can support all models available in vLLM, as long as n
 | NVIDIA | Supported | [deployment guide](./docs/usage/nvidia.md) |
 | Ascend | Supported | [deployment guide](./docs/usage/ascend.md) |
 | MetaX | Supported | - |
-| T-Head | Supported | - |
+| T-Head | Supported | [deployment guide](./docs/usage/thead.md) |
 | Iluvatar | Supported | [deployment guide](./docs/usage/iluvatar.md) |
 | Tsingmicro | Supported | - |
 | Moore Threads | Supported | - |
-| Hygon | Supported | - |
+| Hygon | Supported | [deployment guide](./docs/usage/hygon.md) |
 | Sunrise | Supported | - |
 | ARM64 CPU | Supported | - |
 
 ## Quick Start
 
 ### Setup
+
+For hardware-specific deployment and validation, see the
+[NVIDIA guide](./docs/usage/nvidia.md) and
+[T-Head PPU guide](./docs/usage/thead.md).
 
 1. Install vLLM
 
@@ -142,6 +146,9 @@ In theory, vllm-plugin-FL can support all models available in vLLM, as long as n
     `34c6d2ce416d32a98f1dd2bb6e4cfb67c59342d9`
     (`5.3.5+g34c6d2ce4`). Re-run the blacklist and model tests when moving to a
     newer FlagGems master revision.
+
+For optional explicit fused operators, see the [FlagGems-vllm guide](./docs/flaggems-vllm.md).
+The provider defaults to off; general ATen registration remains with FlagGems.
 
 ### Runtime compatibility hooks
 

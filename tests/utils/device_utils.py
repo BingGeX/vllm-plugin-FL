@@ -50,7 +50,12 @@ def get_backend() -> str:
     if _is_metax_backend():
         return "metax"
     if torch.cuda.is_available():
-        return "nvidia"
+        # Hygon HIP uses Torch CUDA APIs, but remains a distinct test backend.
+        return (
+            "hygon"
+            if os.environ.get("GEMS_VENDOR", "").lower() == "hygon"
+            else "nvidia"
+        )
     try:
         import torch_npu  # noqa: F401
 
@@ -63,25 +68,26 @@ def get_backend() -> str:
 
 def is_accelerator_available() -> bool:
     """Check if any accelerator (GPU/NPU) is available."""
-    return get_backend() not in ("cpu", "")
+    backend = get_backend()
+    if backend == "hygon":
+        return torch.cuda.is_available()
+    return backend not in ("cpu", "")
 
 
 def get_device(index: int = 0) -> torch.device:
     """Get torch device for current backend."""
     backend = get_backend()
-    if backend == "nvidia":
+    if backend in ("nvidia", "hygon", "tianshu", "metax"):
         return torch.device(f"cuda:{index}")
     elif backend == "ascend":
         return torch.device(f"npu:{index}")
-    elif backend in ("tianshu", "metax"):
-        return torch.device(f"cuda:{index}")
     return torch.device("cpu")
 
 
 def get_device_count() -> int:
     """Get the number of available accelerators."""
     backend = get_backend()
-    if backend == "nvidia":
+    if backend in ("nvidia", "hygon", "tianshu", "metax"):
         return torch.cuda.device_count()
     elif backend == "ascend":
         try:
@@ -90,8 +96,6 @@ def get_device_count() -> int:
             return torch.npu.device_count()
         except ImportError:
             return 0
-    elif backend in ("tianshu", "metax"):
-        return torch.cuda.device_count()
     return 0
 
 
