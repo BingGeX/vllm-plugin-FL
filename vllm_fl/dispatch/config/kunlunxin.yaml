@@ -99,6 +99,15 @@ flagos_blacklist:
   - pow_scalar
   - normal_
   - copy_
+  # `aten::_to_copy` (kernel fn `to_copy`) kills the Kunlunxin Triton backend
+  # with `err_code: -714` (misaligned address) on the P800: during
+  # `profile_run` the generated `_to_copy_contiguous_kernel` (Qwen3.6-27B eager)
+  # and `_to_copy_func_close_interleave_kernel_rank_3` (Qwen3.6-35B-A3B, 3-D
+  # non-contiguous RMSNorm input) both fail with
+  # `xpuLaunchKernel ... Exception in kernel execution`, taking the EngineCore
+  # down with an async "illegal memory access". A dtype cast has no reason to
+  # use a generated kernel, so keep it on the vendor torch path.
+  - to_copy
   - gelu
   - masked_scatter_
   - scatter
