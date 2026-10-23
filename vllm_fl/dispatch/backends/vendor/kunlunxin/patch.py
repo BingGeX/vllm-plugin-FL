@@ -69,6 +69,15 @@ def _apply_legacy_kunlunxin_patches():
 
     apply_triton_compat()
 
+    # triton_compat only makes the KV-block zeroing kernel *compile*. Launching
+    # it still faults on P800 (xpuLaunchKernel err_code -714) because it casts
+    # raw absolute addresses. Replace the zeroing with tensor ops.
+    from vllm_fl.dispatch.backends.vendor.kunlunxin.patches.kv_block_zero_compat import (
+        apply_kv_block_zero_compat,
+    )
+
+    apply_kv_block_zero_compat()
+
     # Disable Triton kernels incompatible with Kunlunxin XPU
     os.environ.setdefault("VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE", "0")
 
