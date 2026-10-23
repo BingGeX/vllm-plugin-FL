@@ -6,6 +6,11 @@ Do not keep rewriting that kernel.  Route apply_top_k_top_p to the PyTorch
 impl when current_platform.is_metax().  Upstream files are NEVER edited.
 
 Kill switch: FL_METAX_SAMPLER_PATCH=0
+
+This is the single MetaX sampler workaround: the earlier AST rewrite of
+topk_topp_triton.py (plus its 532-line sidecar kernel) and the vendor
+topk_topp_sampler patch installed the same PyTorch fallback and have been
+removed.
 """
 from __future__ import annotations
 

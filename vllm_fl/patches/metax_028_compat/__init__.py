@@ -43,7 +43,6 @@ def install() -> bool:
     from . import (  # noqa: F401
         _fl_metax_annassign_compat,
         _fl_metax_boolchain_compat,
-        _fl_metax_fla_shmem_compat,
         _fl_metax_functorch_compat,
         _fl_metax_kths_compat,
         _fl_metax_load_ptr_compat,
@@ -52,7 +51,6 @@ def install() -> bool:
         _fl_metax_sampler_compat,
         _fl_metax_sparse_mla_impl_compat,
         _fl_metax_supports_combination_compat,
-        _fl_metax_topk_compat,
         _fl_metax_torch_accel,
         _fl_metax_tree_attn_compat,
     )
