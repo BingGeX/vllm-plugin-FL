@@ -108,6 +108,29 @@ flagos_blacklist:
   # down with an async "illegal memory access". A dtype cast has no reason to
   # use a generated kernel, so keep it on the vendor torch path.
   - to_copy
+  # `aten::zero_` (kernel fn `zero_` in
+  # flag_gems/runtime/backend/_kunlunxin/ops/zero.py) dispatches to the Triton
+  # `_zero_fill_kernel_rank_1`, which faults with `err_code: -714` on the P800.
+  # It is reached from the KV-block zeroing patch
+  # (`kv.narrow(block_dim, ...).zero_()`), so the first
+  # `POST /v1/chat/completions` killed all four TP workers and answered
+  # HTTP 500.  Zeroing has no reason to use a generated kernel: keep
+  # `aten::zero_` on the vendor ATen fill path.
+  - zero_
+  # `aten::min` (kernel fn `min` -> `min_kernel_1`) faults the same way
+  # (`xpuLaunchKernel("min_kernel_1") ... err_code: -714`).  It was reached not
+  # by model math but by `torch._tensor_str`, when vLLM's IR dispatcher
+  # formatted a DEBUG log for the unsupported `rms_norm` provider argument --
+  # so the *logging* inside `profile_run` took the engine down (35B-A3B eager).
+  # `min_dim` shares the same `min_kernel` in that file, so it is excluded too.
+  - min
+  - min_dim
+  # `aten::nonzero` (kernel fn `nonzero`) is the first FlagGems kernel the same
+  # `torch._tensor_str` formatting path runs (`data[mask]` -> nonzero + index).
+  # In the 35B-A3B run TP0 emitted the `nonzero.py` warnings and then logged the
+  # first `kl3ChannelCheckErrors ... status= 700` of that job, so it stays off
+  # the generated kernel too.
+  - nonzero
   - gelu
   - masked_scatter_
   - scatter
