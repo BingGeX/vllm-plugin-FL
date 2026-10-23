@@ -131,6 +131,28 @@ flagos_blacklist:
   # first `kl3ChannelCheckErrors ... status= 700` of that job, so it stays off
   # the generated kernel too.
   - nonzero
+  # `aten::fill_.Scalar` (kernel fn `fill_scalar_`,
+  # flag_gems/runtime/backend/_kunlunxin/ops/fill.py:128) is the FIRST kernel of
+  # the first decode step in the Qwen3.6-35B-A3B graph run: `_prepare_inputs`
+  # does `self.num_accepted_tokens.gpu.fill_(1)`, which JIT-compiles
+  # `fill_scalar_func_kernel_rank_1` (the `jit_monitor` "Triton kernel JIT
+  # compilation during inference" warning is logged one line above the crash)
+  # and then faults with
+  # `xpuLaunchKernel("fill_scalar_func_kernel_rank_1", ...) -> Exception in
+  # kernel execution(err_code: -714)`, surfacing as
+  # `kl3ChannelCheckErrors ... error set to 66250, status= 700` +
+  # `A kernel exception has occurred` + an async "illegal memory access" that
+  # kills all four TP workers.  `aten::fill_.Tensor` (kernel fn `fill_tensor_`)
+  # reaches the same `fill_scalar_func` through the plain Python helper
+  # `fill_tensor_ -> fill_scalar_` (no dispatch involved), so excluding
+  # `fill_scalar_` alone would not protect that overload; the out-of-place
+  # `fill_scalar` / `fill_tensor` launch the identical kernel with the identical
+  # CodeGenConfig.  Filling with a scalar has no reason to use a generated
+  # kernel, so the whole family stays on the vendor ATen path.
+  - fill_scalar_
+  - fill_tensor_
+  - fill_scalar
+  - fill_tensor
   - gelu
   - masked_scatter_
   - scatter
