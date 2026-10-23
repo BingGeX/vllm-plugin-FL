@@ -17,13 +17,22 @@ Launching it still kills the device on P800 at the first real request::
 so ``POST /v1/chat/completions`` answered HTTP 500.  Reimplement
 ``zero_block_ids`` with ordinary tensor ops instead.
 
+The first tensor-op implementation still died with ``error code= 700, an
+illegal memory access was encountered`` at the same call site, but at a
+different line: ``torch.tensor(physical, dtype=torch.long, device=kv.device)``.
+Building the index on the device is a host->device copy, and that copy kernel
+is what faults on P800 (the same ``eager_customized/copy_kernel.cpp`` path that
+breaks the 35B-A3B profile run).  So the zeroing must not touch that path at
+all: contiguous physical kernel blocks are merged into spans and cleared with
+``kv.narrow(block_dim, start, len).zero_()``, which issues only fill kernels.
+
 Semantics are preserved, not weakened.  Upstream builds one segment per
 (outer index, virtual index): segment start = ``data_ptr + outer_offset +
 virtual_index * block_stride_bytes``, block stride = ``block_stride_bytes *
 ratio``, zeroed span = one kernel page (one kernel block's K/V bytes).  Hence
-physical kernel block ``block_id * ratio + virtual_index``.  ``index_fill_``
-over exactly that index set zeroes the same bytes for every block vLLM hands
-us, so a freshly allocated block still reads back as zeros.
+physical kernel block ``block_id * ratio + virtual_index``.  Zeroing exactly
+that index set zeroes the same bytes for every block vLLM hands us, so a
+freshly allocated block still reads back as zeros.
 
 TODO: remove once the XPU Triton backend supports absolute-address pointers
 or vLLM ships a non-Triton zeroing path.
@@ -88,22 +97,41 @@ def _collect_kv_segments(
 
 
 def _zero_block_ids_pytorch(self, block_ids) -> None:
-    """Triton-free replacement for ``KVBlockZeroer.zero_block_ids``."""
+    """Triton-free, copy-free replacement for ``KVBlockZeroer.zero_block_ids``.
+
+    Zeroing used to be done with ``index_fill_`` over an index tensor built as
+    ``torch.tensor(physical, dtype=torch.long, device=kv.device)``.  That is a
+    host->device copy on every call, and on P800 the copy kernel itself faults
+    (``eager_customized/copy_kernel.cpp``) which surfaces as
+    ``error code= 700, an illegal memory access was encountered`` at the first
+    ``POST /v1/chat/completions`` -> HTTP 500.
+
+    Zero contiguous spans with ``narrow`` + ``zero_`` instead: no index tensor
+    is materialized, no host->device copy is issued, and only plain fill
+    kernels touch the KV cache.  The bytes written are identical to the
+    ``index_fill_`` version (same per-dimension slices, value zero).
+    """
     segments = getattr(self, "_kunlunxin_kv_segments", None)
     if not block_ids or not segments:
         return
-    ids = [int(b) for b in block_ids]
+    ids = sorted({int(b) for b in block_ids})
     for kv, block_dim, ratio in segments:
         num_kernel_blocks = kv.shape[block_dim]
-        physical = []
+        run_start = -1
+        run_len = 0
         for block_id in ids:
             start = block_id * ratio
-            if start >= 0 and start + ratio <= num_kernel_blocks:
-                physical.extend(range(start, start + ratio))
-        if not physical:
-            continue
-        index = torch.tensor(physical, dtype=torch.long, device=kv.device)
-        kv.index_fill_(block_dim, index, 0)
+            if start < 0 or start + ratio > num_kernel_blocks:
+                continue
+            if run_start < 0:
+                run_start, run_len = start, ratio
+            elif start == run_start + run_len:
+                run_len += ratio
+            else:
+                kv.narrow(block_dim, run_start, run_len).zero_()
+                run_start, run_len = start, ratio
+        if run_start >= 0:
+            kv.narrow(block_dim, run_start, run_len).zero_()
 
 
 def apply_kv_block_zero_compat() -> None:
