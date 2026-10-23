@@ -106,10 +106,6 @@ jobs:
             # faulthandler dumps the Python traceback on SIGSEGV/SIGABRT,
             # which is what an async device "illegal memory access" looks like.
             echo 'PYTHONFAULTHANDLER=1'
-            # TEMPORARY A/B EXPERIMENT — revert once the result is read.
-            # Disables every Kunlunxin graph adaptation so this run exercises
-            # the upstream graph path unchanged (see patch_graph_adaptations).
-            echo 'VLLM_FL_KUNLUNXIN_GRAPH_PATCHES=0'
           } >> "$GITHUB_ENV"
 
       # This H20 runner fails NVLS multicast binding with CUDA error 401.

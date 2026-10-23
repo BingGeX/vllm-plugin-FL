@@ -420,6 +420,23 @@ class PlatformFL(Platform):
             )
             compilation_config.cudagraph_mode = CUDAGraphMode.NONE
 
+        if (
+            cls.vendor_name == "kunlunxin"
+            and scheduler_config.async_scheduling
+            and compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+        ):
+            # P800: async scheduling overlaps the CPU->GPU input copies of the
+            # next step with the current step's graph replay. The first real
+            # request then faults inside synchronize_input_prep() with an
+            # illegal memory access (host side: KL_XID_KERNEL_EXCEPTION); the
+            # same model runs in eager mode. Ship the combination that works.
+            logger.warning_once(
+                "Kunlunxin: disabling async scheduling because CUDA graphs are "
+                "enabled (%s); the overlap is unsafe on P800.",
+                compilation_config.cudagraph_mode,
+            )
+            scheduler_config.async_scheduling = False
+
         # --------------------------------------------------------
         # maca specific config updates
         if cls.vendor_name == "metax":

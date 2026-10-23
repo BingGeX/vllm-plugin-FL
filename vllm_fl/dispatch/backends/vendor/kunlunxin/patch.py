@@ -97,11 +97,6 @@ def _install_graph_patch(owner, name, replacement, replacements):
 
 def patch_graph_adaptations():
     """Preflight and stage the dependent graph patches before publishing any."""
-    # Diagnostic A/B switch: ``0`` skips every Kunlunxin graph adaptation so a
-    # CI run exercises the upstream graph path unchanged. The default stays
-    # "patches installed"; only the A/B experiment sets it to "0".
-    if os.environ.get("VLLM_FL_KUNLUNXIN_GRAPH_PATCHES", "1") == "0":
-        return
     try:
         import vllm.compilation.breakable_cudagraph as breakable
         import vllm.v1.worker.gpu_model_runner as gpu_model_runner
