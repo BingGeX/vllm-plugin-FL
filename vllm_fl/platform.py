@@ -1,4 +1,4 @@
-# Copyright (c) 2025 BAAI. All rights reserved.
+﻿# Copyright (c) 2025 BAAI. All rights reserved.
 # Adapted from https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/platforms/cuda.py
 # Below is the original copyright:
 # SPDX-License-Identifier: Apache-2.0
@@ -438,12 +438,14 @@ class PlatformFL(Platform):
             )
             scheduler_config.async_scheduling = False
 
+        # `mode` is a real CompilationConfig field, but test stand-ins may omit it.
+        compilation_mode = getattr(compilation_config, "mode", CompilationMode.NONE)
         if (
             cls.device_type == "cuda"
             and cls.vendor_name == "kunlunxin"
             and (
                 compilation_config.cudagraph_mode != CUDAGraphMode.NONE
-                or compilation_config.mode != CompilationMode.NONE
+                or compilation_mode != CompilationMode.NONE
             )
         ):
             # P800: every cudagraph mode tested latches an `illegal memory
@@ -459,7 +461,7 @@ class PlatformFL(Platform):
                 "Kunlunxin: disabling torch.compile and cudagraphs (mode %s, "
                 "cudagraph %s) for %s; compiled cudagraphs latch an illegal "
                 "memory access on P800.",
-                compilation_config.mode,
+                compilation_mode,
                 compilation_config.cudagraph_mode,
                 getattr(model_config, "model", "?"),
             )
