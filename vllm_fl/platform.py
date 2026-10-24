@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2025 BAAI. All rights reserved.
+# Copyright (c) 2025 BAAI. All rights reserved.
 # Adapted from https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/platforms/cuda.py
 # Below is the original copyright:
 # SPDX-License-Identifier: Apache-2.0
