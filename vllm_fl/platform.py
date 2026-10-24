@@ -441,24 +441,30 @@ class PlatformFL(Platform):
         if (
             cls.device_type == "cuda"
             and cls.vendor_name == "kunlunxin"
-            and compilation_config.cudagraph_mode.has_full_cudagraphs()
+            and (
+                compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+                or compilation_config.mode != CompilationMode.NONE
+            )
         ):
-            # P800: the FULL decode-graph capture completes, but the first real
-            # request then dies with a latched `illegal memory access`
-            # (status= 700) on every TP worker; the report lands on whichever
-            # device op runs first after capture, so the capture is the
-            # culprit, not the op it surfaces on.  Not model-class specific:
-            # qwen3_6/35b_a3b_tp4_graph (jobs 120760210560, 120792326400) and
-            # qwen3_6/27b_tp4_graph (job 120792326400) both hit it, while
-            # PIECEWISE capture of the same models is healthy.
+            # P800: every cudagraph mode tested latches an `illegal memory
+            # access` (status= 700) on the first real request of a compiled
+            # model -- FULL (qwen3_6/35b_a3b_tp4_graph, job 120760210560) and
+            # PIECEWISE (qwen3_6/27b_tp4_graph and qwen3_6/35b_a3b_tp4_graph,
+            # jobs 120818798034 / 120818797949).  The report lands on whichever
+            # device op runs first, so the line number only follows that op.
+            # The eager configuration is the one that passes on P800
+            # (qwen3_6/27b_tp4_eager), and compile-without-cudagraph is
+            # untested here, so fall back to eager for the whole vendor.
             logger.warning(
-                "Kunlunxin: downgrading cudagraph_mode from %s to PIECEWISE "
-                "for %s; FULL decode graphs latch an illegal memory access "
-                "on P800.",
+                "Kunlunxin: disabling torch.compile and cudagraphs (mode %s, "
+                "cudagraph %s) for %s; compiled cudagraphs latch an illegal "
+                "memory access on P800.",
+                compilation_config.mode,
                 compilation_config.cudagraph_mode,
                 getattr(model_config, "model", "?"),
             )
-            compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
+            compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+            compilation_config.mode = CompilationMode.NONE
 
         # --------------------------------------------------------
         # maca specific config updates
