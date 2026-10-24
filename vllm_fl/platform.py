@@ -438,6 +438,41 @@ class PlatformFL(Platform):
             )
             scheduler_config.async_scheduling = False
 
+        if (
+            cls.device_type == "cuda"
+            and cls.vendor_name == "kunlunxin"
+            and model_config is not None
+            and compilation_config.cudagraph_mode.has_full_cudagraphs()
+        ):
+            # P800: for sparse (MoE) models the FULL decode-graph capture
+            # completes, but the first real request then dies with a latched
+            # `illegal memory access` (status= 700) on every TP worker
+            # (job 120760210560, qwen3_6/35b_a3b_tp4_graph).  The report lands
+            # on whichever device op runs first after capture -- the line
+            # number just follows that op -- so the capture is the culprit, not
+            # the op it surfaces on.  PIECEWISE capture of the same model is
+            # healthy, so keep piecewise graphs only.
+            hf_config = getattr(model_config, "hf_config", None) or getattr(
+                model_config, "hf_text_config", None
+            )
+            num_experts = 0
+            if hf_config is not None:
+                for attr in ("num_experts", "num_local_experts", "moe_num_experts"):
+                    value = getattr(hf_config, attr, None)
+                    if isinstance(value, int) and value > 1:
+                        num_experts = value
+                        break
+            if num_experts > 1:
+                logger.warning(
+                    "Kunlunxin: downgrading cudagraph_mode from %s to PIECEWISE "
+                    "for MoE model %s (%d experts); FULL decode graphs latch an "
+                    "illegal memory access on P800.",
+                    compilation_config.cudagraph_mode,
+                    getattr(model_config, "model", "?"),
+                    num_experts,
+                )
+                compilation_config.cudagraph_mode = CUDAGraphMode.PIECEWISE
+
         # --------------------------------------------------------
         # maca specific config updates
         if cls.vendor_name == "metax":
