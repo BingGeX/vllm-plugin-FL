@@ -2200,11 +2200,12 @@ class ModelRunnerFL(
         # CPU values are optimistic (all drafts accepted). The kernel
         # corrects on GPU using the previous step's
         # valid_sampled_token_count_gpu. Otherwise, just copy from CPU.
-        if (
+        async_spec_decode_gpu_fixup = (
             self.use_async_spec_decode
             and self.valid_sampled_token_count_gpu is not None
-            and prev_req_id_to_index
-        ):
+            and bool(prev_req_id_to_index)
+        )
+        if async_spec_decode_gpu_fixup:
             self.prev_positions.copy_to_gpu(num_reqs)
             self.prev_num_draft_tokens.copy_to_gpu()
             cpu_values = self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs].to(
@@ -2232,10 +2233,25 @@ class ModelRunnerFL(
         self.num_scheduled_tokens.np[:num_reqs] = num_scheduled_tokens
         self.num_scheduled_tokens.copy_to_gpu(num_reqs)
         num_scheduled_tokens_gpu = self.num_scheduled_tokens.gpu[:num_reqs]
-        self.positions[:total_num_scheduled_tokens] = (
-            self.num_computed_tokens[req_indices_gpu].to(torch.int64)
-            + self.query_pos.gpu[:total_num_scheduled_tokens]
-        )
+        if self._kl_guard_on() and not async_spec_decode_gpu_fixup:
+            # `aten::index` on the P800 kills every TP worker with
+            # `Exception in kernel execution (err_code 714)` on the first decode
+            # step of the Qwen3.6-35B-A3B graph run (`indices_len=1`): the
+            # FlagGems generated `index` kernel faults, and so does the xdnn
+            # lowering (`index_select.cpp` / `math_gather_nd.cpp`).  The values
+            # gathered here are already available on the CPU: without the async
+            # spec-decode fixup above, the device copy of `num_computed_tokens`
+            # was just refreshed from the very same CPU array, and `positions_np`
+            # has num_computed_tokens + query_pos folded in already.  Fill
+            # `positions` from the CPU instead of launching a device gather.
+            self.positions[:total_num_scheduled_tokens] = torch.from_numpy(
+                positions_np
+            ).to(self.device, non_blocking=True)
+        else:
+            self.positions[:total_num_scheduled_tokens] = (
+                self.num_computed_tokens[req_indices_gpu].to(torch.int64)
+                + self.query_pos.gpu[:total_num_scheduled_tokens]
+            )
         self.seq_lens[:num_reqs] = (
             self.num_computed_tokens[:num_reqs] + num_scheduled_tokens_gpu
         )
