@@ -420,11 +420,13 @@ class PlatformFL(Platform):
             )
             compilation_config.cudagraph_mode = CUDAGraphMode.NONE
 
+        # None means "not resolved yet", i.e. the default: enabled. Test
+        # stand-ins may omit the field entirely, so read it defensively.
+        _async_scheduling = getattr(scheduler_config, "async_scheduling", False)
         if (
             cls.device_type == "cuda"
             and cls.vendor_name == "kunlunxin"
-            # None means "not resolved yet", i.e. the default: enabled.
-            and scheduler_config.async_scheduling is not False
+            and _async_scheduling is not False
         ):
             # P800: async scheduling overlaps the CPU->GPU input copies of the
             # next step with the current step's compute. That overlap is unsafe
