@@ -1099,4 +1099,10 @@ def patch_ssm_cache_update():
         apply_ssm_patch()
         logger.info("Patched GatedDeltaNetAttention._forward_core for Kunlunxin")
     except Exception as e:
-        logger.warning("Failed to patch _forward_core: %s", e)
+        logger.error(
+            "Failed to patch GatedDeltaNetAttention._forward_core for Kunlunxin: "
+            "%s: %s",
+            type(e).__name__,
+            e,
+        )
+        raise
