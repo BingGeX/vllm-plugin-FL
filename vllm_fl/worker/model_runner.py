@@ -7315,10 +7315,14 @@ class ModelRunnerFL(
         cudagraph_mode = self.compilation_config.resolve_cudagraph_mode_and_sizes(
             min_cg_support,
             min_cg_attn_backend,
-            self.uniform_decode_query_len,
-            self.parallel_config.tensor_parallel_size,
-            self.kv_cache_config,
-            self.max_num_reqs,
+            # vLLM 0.28 inserts use_v2_model_runner before tensor_parallel_size
+            # in this signature; bind every argument by name so the TP size,
+            # kv-cache config and max_num_reqs cannot shift into the next slot.
+            uniform_decode_query_len=self.uniform_decode_query_len,
+            use_v2_model_runner=False,
+            tensor_parallel_size=self.parallel_config.tensor_parallel_size,
+            kv_cache_config=self.kv_cache_config,
+            max_num_reqs=self.max_num_reqs,
             is_profiling=is_profiling,
         )
 
@@ -7774,6 +7778,8 @@ class ModelRunnerFL(
         self.routed_experts_capturer = RoutedExpertsCapturer(
             max_num_batched_tokens=self.scheduler_config.max_num_batched_tokens,
             vllm_config=self.vllm_config,
+            # vLLM 0.28 made this a required constructor argument.
+            kv_cache_config=self.kv_cache_config,
         )
         self.routed_experts_attn_gid = self._get_attention_kv_cache_gid()
         self._bind_routed_experts_capturer(self.routed_experts_capturer)
