@@ -423,18 +423,21 @@ class PlatformFL(Platform):
         if (
             cls.device_type == "cuda"
             and cls.vendor_name == "kunlunxin"
-            and compilation_config.cudagraph_mode != CUDAGraphMode.NONE
-            and scheduler_config.async_scheduling
+            # None means "not resolved yet", i.e. the default: enabled.
+            and scheduler_config.async_scheduling is not False
         ):
             # P800: async scheduling overlaps the CPU->GPU input copies of the
-            # next step with the current step's graph replay. The first real
-            # request then faults inside synchronize_input_prep() with an
-            # illegal memory access (host side: KL_XID_KERNEL_EXCEPTION); the
-            # same model runs in eager mode. Ship the combination that works.
+            # next step with the current step's compute. That overlap is unsafe
+            # on this runtime whatever the graph mode: with CUDA graphs the
+            # first request faults inside synchronize_input_prep() with an
+            # illegal memory access (host side: KL_XID_KERNEL_EXCEPTION), and
+            # fully eager online serving decodes a prompt to a degenerate token
+            # stream while offline LLM.generate, which is synchronous, returns
+            # the correct answer for the same TP=4 eager engine. Keep the
+            # online path off the overlap.
             logger.warning_once(
-                "Kunlunxin: disabling async scheduling because CUDA graphs are "
-                "enabled (%s); the overlap is unsafe on P800.",
-                compilation_config.cudagraph_mode,
+                "Kunlunxin: disabling async scheduling; the overlap corrupts "
+                "decode on P800."
             )
             scheduler_config.async_scheduling = False
 
