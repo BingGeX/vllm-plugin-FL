@@ -1,9 +1,9 @@
 """MetaX (MACA) compatibility shims for the vLLM 0.28 empty wheel.
 
-These modules patch ``torch`` / ``triton`` / ``vllm`` / ``vllm_metax`` in
-memory before the affected kernels are first compiled. They used to be
-installed as ``.pth`` files in ``site-packages``, which left hooks behind
-after uninstalling the wheel and required an out-of-band installer.
+These modules patch ``torch`` / ``triton`` / ``vllm`` in memory before the
+affected kernels are first compiled. They used to be installed as ``.pth``
+files in ``site-packages``, which left hooks behind after uninstalling the
+wheel and required an out-of-band installer.
 
 They are now part of the plugin's normal lifecycle: :func:`install` is called
 from the FL plugin entry point (``vllm_fl.register``) before the platform slot
@@ -46,13 +46,9 @@ def install() -> bool:
         _fl_metax_functorch_compat,
         _fl_metax_kths_compat,
         _fl_metax_load_ptr_compat,
-        _fl_metax_lora_compat,
         _fl_metax_moe_is_monolithic_compat,
         _fl_metax_sampler_compat,
-        _fl_metax_sparse_mla_impl_compat,
-        _fl_metax_supports_combination_compat,
         _fl_metax_torch_accel,
-        _fl_metax_tree_attn_compat,
     )
     return True
 

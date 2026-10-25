@@ -16,9 +16,8 @@
 #
 # This is the single FLA autotuner fix in FL: it is applied from
 # PlatformFL.import_kernels() (VLLM_PLUGINS=fl claims the platform slot, so
-# that hook always runs). The earlier meta_path shim
-# (_fl_metax_fla_shmem_compat) patched the same kernel a second time and has
-# been removed.
+# that hook always runs). The former meta_path shim that patched the same
+# kernel a second time has been removed.
 # ------------------------------------------------------------
 
 from vllm.third_party.flash_linear_attention.ops.op import exp
