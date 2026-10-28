@@ -29,14 +29,7 @@ def _is_metax_backend() -> bool:
     if os.environ.get("GEMS_VENDOR", "").strip().lower() == "metax":
         return True
     version = str(getattr(torch, "__version__", "")).lower()
-    if "metax" in version or "maca" in version:
-        return True
-    try:
-        import importlib.util
-
-        return importlib.util.find_spec("mcoplib") is not None
-    except Exception:
-        return False
+    return "metax" in version or "maca" in version
 
 
 def _gcu_runtime():
