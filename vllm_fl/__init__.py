@@ -332,8 +332,10 @@ def register():
         from vllm_fl.utils import DeviceInfo
 
         vendor_name = DeviceInfo().vendor_name
-        if vendor_name == "ascend":
-            # v0.28 defaults some models to the upstream CUDA/UVA runner.
+        if vendor_name in ("ascend", "enflame", "gcu"):
+            # v0.28 defaults some models to the upstream V2 runner. These
+            # backends use ModelRunnerFL; choose it before VllmConfig reads
+            # model defaults.
             os.environ.setdefault("VLLM_USE_V2_MODEL_RUNNER", "0")
         if vendor_name == "nvidia":
             _force_adopt_platform()
