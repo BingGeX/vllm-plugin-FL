@@ -483,32 +483,20 @@ class PlatformFL(Platform):
             )
             compilation_config.cudagraph_mode = CUDAGraphMode.NONE
 
-        # None means "not resolved yet", i.e. the default: enabled. Test
-        # stand-ins may omit the field entirely, so read it defensively.
+        # Test stand-ins may omit async_scheduling; None means "not resolved
+        # yet", i.e. the default: enabled.
         _async_scheduling = getattr(scheduler_config, "async_scheduling", False)
-        if cls.vendor_name == "kunlunxin":
-            logger.warning(
-                "Kunlunxin config: vendor=%r device_type=%r async_scheduling=%r "
-                "compilation_mode=%r cudagraph_mode=%r",
-                cls.vendor_name,
-                cls.device_type,
-                _async_scheduling,
-                getattr(compilation_config, "mode", None),
-                getattr(compilation_config, "cudagraph_mode", None),
-            )
         if cls.vendor_name == "kunlunxin" and _async_scheduling is not False:
             # P800: async scheduling overlaps the CPU->GPU input copies of the
-            # next step with the current step's compute. That overlap is unsafe
-            # on this runtime whatever the graph mode: with CUDA graphs the
-            # first request faults inside synchronize_input_prep() with an
-            # illegal memory access (host side: KL_XID_KERNEL_EXCEPTION), and
-            # fully eager online serving decodes a prompt to a degenerate token
-            # stream while offline LLM.generate, which is synchronous, returns
-            # the correct answer for the same TP=4 eager engine. Keep the
-            # online path off the overlap.
+            # next step with the current step's compute. With CUDA graphs that
+            # overlap faults on the first real request inside
+            # synchronize_input_prep() with an illegal memory access (host side:
+            # KL_XID_KERNEL_EXCEPTION). vLLM leaves the flag disabled by default
+            # on this platform; honour an explicit --async-scheduling by
+            # turning it off rather than shipping a known-faulting combination.
             logger.warning_once(
-                "Kunlunxin: disabling async scheduling; the overlap corrupts "
-                "decode on P800."
+                "Kunlunxin: disabling async scheduling; the overlap faults "
+                "with CUDA graphs on P800."
             )
             scheduler_config.async_scheduling = False
 
