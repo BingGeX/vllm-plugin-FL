@@ -48,9 +48,19 @@ device_overrides:
       served_model_name: "qwen3"
       startup_retries: 420
       max_tokens: 256
+      # Diagnostic: run the raw-prompt endpoint alongside chat so a failure can
+      # be attributed to the chat template / reasoning parser instead of the
+      # shared engine path. Assertions are unchanged.
+      endpoints:
+        - "chat"
+        - "completions"
+      completion_prompt: "The capital of France is"
       extra_args:
         - "--reasoning-parser"
         - "qwen3"
+        # Diagnostic: log each request's sampling params and generated output
+        # so the server log shows what the engine actually produced.
+        - "--enable-log-requests"
       chat_cases:
         - name: text
           messages:
