@@ -48,22 +48,9 @@ device_overrides:
       served_model_name: "qwen3"
       startup_retries: 420
       max_tokens: 256
-      # Diagnostic: the chat endpoint degenerates to a constant token while the
-      # offline raw-prompt path decodes correctly. Run "completion" in the same
-      # job with the *already templated* prompt so both endpoints feed the
-      # engine the identical token sequence; a difference then isolates the
-      # chat layer instead of the shared engine path. Assertions unchanged.
-      endpoints:
-        - "chat"
-        - "completion"
-      completion_prompt: "<|im_start|>user\nThe capital of France is<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
       extra_args:
         - "--reasoning-parser"
         - "qwen3"
-        # Diagnostic: log each request's prompt/sampling params and the
-        # generated output so the server log shows what the engine produced.
-        - "--enable-log-requests"
-        - "--enable-log-outputs"
       chat_cases:
         - name: text
           messages:
