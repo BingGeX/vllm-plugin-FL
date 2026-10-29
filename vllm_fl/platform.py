@@ -236,6 +236,16 @@ class PlatformFL(Platform):
         """
         if cls.vendor_name != "metax":
             return
+
+        # import_kernels() applies the patches while vLLM may still be
+        # initialising, so one of them can hit a circular import. Retry the
+        # leftovers here, before any model layer is built.
+        from vllm_fl.dispatch.backends.vendor.metax.patches import ensure_patches
+
+        failed_patches = ensure_patches()
+        if failed_patches:
+            logger.warning("metax patches not applied: %s", sorted(failed_patches))
+
         compilation_config = getattr(vllm_config, "compilation_config", None)
         if compilation_config is None:
             return
