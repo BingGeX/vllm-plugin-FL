@@ -192,15 +192,16 @@ flagos_blacklist:
   - fused_gdn_gating
   # `aten::lt` reached from vLLM 0.28's PyTorch top-k/top-p sampler
   # (`topk_topp_sampler.py: apply_top_k_top_p_pytorch` -> `logits_sort < top_k_mask`)
-  # takes the whole EngineCore down on the P800: the generated
-  # `lt_func_kernel_rank_2_1d_tile` fails in `make_ttxir` because
-  # `TRITONXPU_COMPARE_FUSION` (set by flag_gems' own `lt`/`ge` wrappers) emits a
-  # `triton_xpu.cmpf` whose result is `tensor<...xui32>`, which the TritonXPU
-  # verifier rejects -> `OutOfResources: uni_sram` -> every TP worker dies ->
-  # `POST /v1/chat/completions` answers HTTP 500.  A plain comparison has no
-  # reason to use a generated kernel, so the whole family stays on the vendor
-  # ATen path (`ge` is the same defect, hit by `batched_count_greater_than`
-  # whenever a request asks for logprobs).
+  # takes the whole EngineCore down on the P800: the flag_gems
+  # `pointwise_dynamic` kernel is rejected by the TritonXPU compare-fusion
+  # pipeline (`triton_xpu.cmpf` receives `tensor<...xui32>`), which surfaces as
+  # the misleading `OutOfResources: uni_sram` -> every TP worker dies ->
+  # `POST /v1/chat/completions` answers HTTP 500.  Reproduced with flag_gems
+  # alone (no vLLM involved); `TRITONXPU_COMPARE_FUSION=0` does not help.
+  # `ge` is the same defect (hit by `batched_count_greater_than` whenever a
+  # request asks for logprobs); `le`/`gt` are the same kernel family.
+  # Upstream issue: https://github.com/flagos-ai/FlagGems/issues/7965
+  # Drop these entries once FlagGems fixes it.
   - lt
   - le
   - ge
